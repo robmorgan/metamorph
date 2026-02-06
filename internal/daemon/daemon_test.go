@@ -544,6 +544,48 @@ func TestCleanOrphansWithClient(t *testing.T) {
 	})
 }
 
+// --- readDaemonLogHint Tests ---
+
+func TestReadDaemonLogHint(t *testing.T) {
+	t.Run("returns formatted hint when file has content", func(t *testing.T) {
+		dir := t.TempDir()
+		logPath := filepath.Join(dir, "daemon.log")
+		_ = os.WriteFile(logPath, []byte("error: build failed\nexit status 1\n"), 0644)
+
+		hint := readDaemonLogHint(logPath)
+		if hint == "" {
+			t.Fatal("expected non-empty hint")
+		}
+		if !strings.Contains(hint, "Daemon log") {
+			t.Errorf("hint missing 'Daemon log' prefix: %q", hint)
+		}
+		if !strings.Contains(hint, "error: build failed") {
+			t.Errorf("hint missing log content: %q", hint)
+		}
+		if !strings.Contains(hint, logPath) {
+			t.Errorf("hint missing log path: %q", hint)
+		}
+	})
+
+	t.Run("returns empty string for missing file", func(t *testing.T) {
+		hint := readDaemonLogHint("/nonexistent/path/daemon.log")
+		if hint != "" {
+			t.Errorf("expected empty string, got: %q", hint)
+		}
+	})
+
+	t.Run("returns empty string for empty file", func(t *testing.T) {
+		dir := t.TempDir()
+		logPath := filepath.Join(dir, "daemon.log")
+		_ = os.WriteFile(logPath, []byte(""), 0644)
+
+		hint := readDaemonLogHint(logPath)
+		if hint != "" {
+			t.Errorf("expected empty string for empty file, got: %q", hint)
+		}
+	})
+}
+
 // --- normalizeStatus Tests ---
 
 func TestNormalizeStatus(t *testing.T) {

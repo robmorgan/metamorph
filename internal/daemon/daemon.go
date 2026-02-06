@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -25,7 +27,7 @@ import (
 const (
 	monitorInterval       = 30 * time.Second
 	staleTaskMaxAge       = 2 * time.Hour
-	startupTimeout        = 10 * time.Second
+	startupTimeout        = 5 * time.Minute
 	shutdownTimeout       = 30 * time.Second
 	commitBatchInterval   = 60 * time.Second
 	errorDebounceCooldown = 5 * time.Minute
@@ -86,6 +88,12 @@ func Start(projectDir string, cfg *config.Config, apiKey string) error {
 		return fmt.Errorf("daemon: failed to clean orphans: %w", err)
 	}
 
+	// Remove stale state.json so the polling loop doesn't find an old one.
+	statePath := filepath.Join(projectDir, constants.StateFile)
+	if err := os.Remove(statePath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("daemon: failed to remove stale state file: %w", err)
+	}
+
 	// Re-exec with --daemon-mode.
 	exe, err := os.Executable()
 	if err != nil {
@@ -126,27 +134,79 @@ func Start(projectDir string, cfg *config.Config, apiKey string) error {
 	}
 
 	// Release the child so it outlives us.
+	childPID := cmd.Process.Pid
 	_ = cmd.Process.Release()
 
-	// Wait for state.json to appear.
-	statePath := filepath.Join(projectDir, constants.StateFile)
+	// Wait for state.json to appear, tailing daemon.log for progress.
 	deadline := time.Now().Add(startupTimeout)
+
+	// Open the log file for tailing progress messages.
+	tailFile, err := os.Open(logPath)
+	if err != nil {
+		tailFile = nil // non-fatal: just skip tailing
+	}
+	var reader *bufio.Reader
+	if tailFile != nil {
+		reader = bufio.NewReader(tailFile)
+	}
+	printed := make(map[string]bool) // deduplicate messages
+
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(statePath); err == nil {
+			if tailFile != nil {
+				tailFile.Close()
+			}
 			logFile.Close()
 			return nil
 		}
+
+		// Tail new lines from the daemon log and print progress.
+		if tailFile != nil {
+			for {
+				line, err := reader.ReadString('\n')
+				if line != "" {
+					if msg := parseSlogMsg(line); msg != "" && !printed[msg] {
+						printed[msg] = true
+						fmt.Println(formatProgressMsg(msg))
+					}
+				}
+				if err != nil {
+					break // io.EOF or other error — wait for more data
+				}
+			}
+		}
+
+		// Check if the child process died before writing state.json.
+		if !processAlive(childPID) {
+			if tailFile != nil {
+				tailFile.Close()
+			}
+			logFile.Close()
+			hint := readDaemonLogHint(logPath)
+			return fmt.Errorf("daemon: process exited unexpectedly before becoming ready%s", hint)
+		}
+
 		time.Sleep(250 * time.Millisecond)
 	}
 
 	// Read daemon log for diagnostics.
-	logFile.Close()
-	hint := ""
-	if logData, err := os.ReadFile(logPath); err == nil && len(logData) > 0 {
-		hint = fmt.Sprintf("\n\nDaemon log (%s):\n%s", logPath, string(logData))
+	if tailFile != nil {
+		tailFile.Close()
 	}
+	logFile.Close()
+	hint := readDaemonLogHint(logPath)
 
 	return fmt.Errorf("daemon: timed out waiting for state.json after %s%s", startupTimeout, hint)
+}
+
+// readDaemonLogHint reads the daemon log file and returns a formatted hint
+// string for inclusion in error messages. Returns empty string on failure.
+func readDaemonLogHint(logPath string) string {
+	logData, err := os.ReadFile(logPath)
+	if err != nil || len(logData) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n\nDaemon log (%s):\n%s", logPath, string(logData))
 }
 
 // Stop sends SIGTERM to the daemon process and waits for it to exit.
@@ -242,11 +302,13 @@ func Run(projectDir string, cfg *config.Config, apiKey string, dockerClient dock
 	defer cancel()
 
 	// Build image.
+	slog.Info("building docker image")
 	if err := d.docker.BuildImage(projectDir); err != nil {
 		return fmt.Errorf("daemon: failed to build image: %w", err)
 	}
 
 	// Start agents.
+	slog.Info("starting agents")
 	agentStates, err := d.startAgents(ctx)
 	if err != nil {
 		return fmt.Errorf("daemon: failed to start agents: %w", err)
@@ -291,6 +353,7 @@ func (d *Daemon) startAgents(ctx context.Context) ([]AgentState, error) {
 			role = roles[(i-1)%len(roles)]
 		}
 
+		slog.Info("starting agent", "agent", i, "role", role)
 		containerID, err := d.docker.StartAgent(ctx, docker.AgentOpts{
 			ProjectDir: d.projectDir,
 			AgentID:    i,
@@ -715,6 +778,27 @@ func processAlive(pid int) bool {
 	// On Unix, FindProcess always succeeds. Signal 0 checks existence.
 	err = proc.Signal(syscall.Signal(0))
 	return err == nil
+}
+
+// slogMsgRe matches the msg="..." field in slog text output.
+var slogMsgRe = regexp.MustCompile(`msg="([^"]+)"`)
+
+// parseSlogMsg extracts the msg value from a slog text-format log line.
+func parseSlogMsg(line string) string {
+	m := slogMsgRe.FindStringSubmatch(line)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
+
+// formatProgressMsg converts a slog msg value into a user-friendly progress string.
+func formatProgressMsg(msg string) string {
+	// Capitalize first letter and add ellipsis.
+	if len(msg) == 0 {
+		return ""
+	}
+	return strings.ToUpper(msg[:1]) + msg[1:] + "..."
 }
 
 // normalizeStatus converts Docker status strings to our simpler model.
