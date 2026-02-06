@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,14 +18,18 @@ import (
 	"github.com/brightfame/metamorph/internal/config"
 	"github.com/brightfame/metamorph/internal/constants"
 	"github.com/brightfame/metamorph/internal/docker"
+	"github.com/brightfame/metamorph/internal/notify"
 	"github.com/brightfame/metamorph/internal/tasks"
 )
 
 const (
-	monitorInterval  = 30 * time.Second
-	staleTaskMaxAge  = 2 * time.Hour
-	startupTimeout   = 10 * time.Second
-	shutdownTimeout  = 30 * time.Second
+	monitorInterval       = 30 * time.Second
+	staleTaskMaxAge       = 2 * time.Hour
+	startupTimeout        = 10 * time.Second
+	shutdownTimeout       = 30 * time.Second
+	commitBatchInterval   = 60 * time.Second
+	errorDebounceCooldown = 5 * time.Minute
+	logTailLines          = 50
 )
 
 // State represents the daemon's persisted state.
@@ -63,6 +68,12 @@ type Daemon struct {
 	docker     docker.DockerClient
 	state      *State
 	startedAt  time.Time
+
+	// Notification state.
+	prevCommitCount   int                  // previous commit count for batching
+	commitBatchStart  time.Time            // when the current commit batch started
+	pendingCommits    []string             // commit messages accumulated during batch window
+	lastErrorNotified map[int]time.Time    // agentID → last time we sent test_failure for this agent
 }
 
 // Start launches the daemon as a background subprocess. It re-execs the
@@ -194,11 +205,12 @@ func IsRunning(projectDir string) bool {
 // This is exported so the CLI can call it from the start command.
 func Run(projectDir string, cfg *config.Config, apiKey string, dockerClient docker.DockerClient) error {
 	d := &Daemon{
-		projectDir: projectDir,
-		cfg:        cfg,
-		apiKey:     apiKey,
-		docker:     dockerClient,
-		startedAt:  time.Now().UTC(),
+		projectDir:        projectDir,
+		cfg:               cfg,
+		apiKey:            apiKey,
+		docker:            dockerClient,
+		startedAt:         time.Now().UTC(),
+		lastErrorNotified: make(map[int]time.Time),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -291,11 +303,17 @@ func (d *Daemon) monitor(ctx context.Context) {
 	// Update task info.
 	d.updateTasks()
 
-	// Count commits.
-	d.countCommits()
+	// Count commits and notify if new ones detected.
+	d.countCommitsAndNotify(now)
 
-	// Clear stale task locks.
-	d.clearStaleTasks()
+	// Clear stale task locks and notify.
+	d.clearStaleTasksAndNotify(now)
+
+	// Check agent logs for errors.
+	d.checkAgentLogs(now)
+
+	// Flush pending commit batch if window has elapsed.
+	d.flushCommitBatch(now)
 
 	// Update uptime.
 	d.state.Stats.UptimeSeconds = int(now.Sub(d.startedAt).Seconds())
@@ -356,6 +374,16 @@ func (d *Daemon) restartCrashedAgents(ctx context.Context, infos []docker.AgentI
 			a.ContainerID = containerID
 			a.Status = "running"
 			a.LastActivity = time.Now().UTC()
+
+			// Notify about the crash/restart.
+			d.sendEvent(notify.Event{
+				Type:      notify.EventAgentCrashed,
+				AgentID:   a.ID,
+				AgentRole: a.Role,
+				Project:   d.cfg.Project.Name,
+				Message:   fmt.Sprintf("agent-%d (%s) crashed and was restarted", a.ID, a.Role),
+				Timestamp: time.Now().UTC(),
+			})
 		}
 	}
 }
@@ -383,8 +411,8 @@ func (d *Daemon) updateTasks() {
 	}
 }
 
-// countCommits counts total commits in the upstream repo.
-func (d *Daemon) countCommits() {
+// countCommitsAndNotify counts total commits and accumulates new ones for batched notification.
+func (d *Daemon) countCommitsAndNotify(now time.Time) {
 	upstreamPath := filepath.Join(d.projectDir, constants.UpstreamDir)
 	cmd := exec.Command("git", "rev-list", "--count", "HEAD")
 	cmd.Dir = upstreamPath
@@ -397,17 +425,152 @@ func (d *Daemon) countCommits() {
 	if err != nil {
 		return
 	}
+
+	newCommits := count - d.prevCommitCount
+	if d.prevCommitCount > 0 && newCommits > 0 {
+		// Read the latest commit messages.
+		logCmd := exec.Command("git", "log", "--oneline", fmt.Sprintf("-%d", newCommits))
+		logCmd.Dir = upstreamPath
+		var logOut bytes.Buffer
+		logCmd.Stdout = &logOut
+		if err := logCmd.Run(); err == nil {
+			messages := strings.Split(strings.TrimSpace(logOut.String()), "\n")
+			if d.commitBatchStart.IsZero() {
+				d.commitBatchStart = now
+			}
+			d.pendingCommits = append(d.pendingCommits, messages...)
+		}
+	}
+
+	d.prevCommitCount = count
 	d.state.Stats.TotalCommits = count
 }
 
-// clearStaleTasks removes task locks older than the threshold.
-func (d *Daemon) clearStaleTasks() {
+// flushCommitBatch sends a batched commits_pushed notification if the batch window has elapsed.
+func (d *Daemon) flushCommitBatch(now time.Time) {
+	if len(d.pendingCommits) == 0 {
+		return
+	}
+	if now.Sub(d.commitBatchStart) < commitBatchInterval {
+		return
+	}
+
+	d.sendEvent(notify.Event{
+		Type:      notify.EventCommitsPushed,
+		Project:   d.cfg.Project.Name,
+		Message:   fmt.Sprintf("%d new commit(s) pushed", len(d.pendingCommits)),
+		Timestamp: now,
+		Details: map[string]interface{}{
+			"count":   len(d.pendingCommits),
+			"commits": d.pendingCommits,
+		},
+	})
+
+	d.pendingCommits = nil
+	d.commitBatchStart = time.Time{}
+}
+
+// clearStaleTasksAndNotify removes stale task locks and sends notifications.
+func (d *Daemon) clearStaleTasksAndNotify(now time.Time) {
 	upstreamPath := filepath.Join(d.projectDir, constants.UpstreamDir)
 	cleared, err := tasks.ClearStaleTasks(upstreamPath, staleTaskMaxAge)
 	if err != nil {
 		return
 	}
 	d.state.Stats.TasksCompleted += len(cleared)
+
+	for _, taskName := range cleared {
+		d.sendEvent(notify.Event{
+			Type:      notify.EventStaleLock,
+			Project:   d.cfg.Project.Name,
+			Message:   fmt.Sprintf("stale task lock cleared: %s", taskName),
+			Timestamp: now,
+			Details: map[string]interface{}{
+				"task": taskName,
+			},
+		})
+	}
+}
+
+// checkAgentLogs scans each agent's latest log file for ERROR:/FAIL lines.
+func (d *Daemon) checkAgentLogs(now time.Time) {
+	for _, a := range d.state.Agents {
+		// Debounce: skip if we notified about this agent recently.
+		if lastNotified, ok := d.lastErrorNotified[a.ID]; ok {
+			if now.Sub(lastNotified) < errorDebounceCooldown {
+				continue
+			}
+		}
+
+		logDir := filepath.Join(d.projectDir, constants.AgentLogDir, fmt.Sprintf("agent-%d", a.ID))
+		entries, err := os.ReadDir(logDir)
+		if err != nil {
+			continue
+		}
+
+		// Find the latest session log.
+		var latestLog string
+		var latestNum int
+		for _, e := range entries {
+			name := e.Name()
+			if !strings.HasPrefix(name, "session-") || !strings.HasSuffix(name, ".log") {
+				continue
+			}
+			numStr := strings.TrimSuffix(strings.TrimPrefix(name, "session-"), ".log")
+			num, err := strconv.Atoi(numStr)
+			if err != nil {
+				continue
+			}
+			if num > latestNum {
+				latestNum = num
+				latestLog = filepath.Join(logDir, name)
+			}
+		}
+
+		if latestLog == "" {
+			continue
+		}
+
+		data, err := os.ReadFile(latestLog)
+		if err != nil {
+			continue
+		}
+
+		lines := strings.Split(string(data), "\n")
+		start := 0
+		if len(lines) > logTailLines {
+			start = len(lines) - logTailLines
+		}
+
+		for _, line := range lines[start:] {
+			if strings.Contains(line, "ERROR:") || strings.Contains(line, "FAIL") {
+				d.lastErrorNotified[a.ID] = now
+				d.sendEvent(notify.Event{
+					Type:      notify.EventTestFailure,
+					AgentID:   a.ID,
+					AgentRole: a.Role,
+					Project:   d.cfg.Project.Name,
+					Message:   fmt.Sprintf("error detected in agent-%d logs", a.ID),
+					Timestamp: now,
+					Details: map[string]interface{}{
+						"line": strings.TrimSpace(line),
+					},
+				})
+				break // one notification per agent per check
+			}
+		}
+	}
+}
+
+// sendEvent sends a notification event, logging any errors.
+func (d *Daemon) sendEvent(event notify.Event) {
+	webhookURL := d.cfg.Notifications.WebhookURL
+	if webhookURL == "" {
+		return
+	}
+	if err := notify.Send(webhookURL, event); err != nil {
+		slog.Error("failed to send notification", "event", event.Type, "error", err)
+	}
 }
 
 // shutdown stops all agents and writes final state.
