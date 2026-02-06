@@ -335,7 +335,7 @@ These are rough estimates. Actual costs vary based on task complexity, how often
 - Monitor with `metamorph status` and stop early if agents are thrashing
 - Default is Opus; switch to Sonnet for cost-sensitive tasks
 
-## Worked Example: JSON Parser in Rust
+## Example: JSON Parser in Rust
 
 Here's how you might use MetaMorph to build a JSON parser with 4 agents:
 
