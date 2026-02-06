@@ -165,6 +165,10 @@ func syncFilesToUpstream(projectDir, upstreamPath string) error {
 		}
 	}
 
+	// Set identity so commits work without a global git config.
+	_ = runGit(cloneDir, "config", "user.name", "metamorph")
+	_ = runGit(cloneDir, "config", "user.email", "metamorph@localhost")
+
 	// Stage and commit.
 	if err := runGit(cloneDir, "add", "."); err != nil {
 		return fmt.Errorf("failed to stage files: %w", err)
