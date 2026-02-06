@@ -1,2 +1,0 @@
-backend/critical-updates
-backend/es-indexer
