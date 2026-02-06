@@ -4,7 +4,7 @@
   <br>MetaMorph
 </h1>
   <p align="center">
-    <strong>Orchestrate parallel Claude Code agents that coordinate through git.</strong>
+    <strong>Orchestrate parallel Claude Code Agents that coordinate through Git. ✨</strong>
   </p>
 </p>
 
@@ -25,7 +25,7 @@ The alternative is parallelism: split the work across multiple agents that each 
 ```
                           ┌───────────────────────────────┐
                           │        metamorph CLI          │
-                          │   init / start / stop / status│
+                          │ init / start / stop / status  │
                           └──────────┬────────────────────┘
                                      │
                           ┌──────────▼────────────────────┐
