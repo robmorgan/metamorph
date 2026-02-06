@@ -97,8 +97,19 @@ func Start(projectDir string, cfg *config.Config, apiKey string) error {
 		"--api-key", apiKey,
 	)
 	cmd.Dir = projectDir
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+
+	// Redirect daemon output to a log file for diagnostics.
+	logPath := filepath.Join(projectDir, constants.DaemonLogFile)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		return fmt.Errorf("daemon: failed to create log dir: %w", err)
+	}
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return fmt.Errorf("daemon: failed to create log file: %w", err)
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
 	// Detach from parent session.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
@@ -122,12 +133,20 @@ func Start(projectDir string, cfg *config.Config, apiKey string) error {
 	deadline := time.Now().Add(startupTimeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(statePath); err == nil {
+			logFile.Close()
 			return nil
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
 
-	return fmt.Errorf("daemon: timed out waiting for state.json after %s", startupTimeout)
+	// Read daemon log for diagnostics.
+	logFile.Close()
+	hint := ""
+	if logData, err := os.ReadFile(logPath); err == nil && len(logData) > 0 {
+		hint = fmt.Sprintf("\n\nDaemon log (%s):\n%s", logPath, string(logData))
+	}
+
+	return fmt.Errorf("daemon: timed out waiting for state.json after %s%s", startupTimeout, hint)
 }
 
 // Stop sends SIGTERM to the daemon process and waits for it to exit.

@@ -10,6 +10,7 @@ const (
 	ProgressFile    = "PROGRESS.md"
 	AgentPromptFile = "AGENT_PROMPT.md"
 	DaemonPIDFile   = ".metamorph/daemon.pid"
+	DaemonLogFile   = ".metamorph/daemon.log"
 	HeartbeatFile   = ".metamorph/heartbeat"
 )
 
