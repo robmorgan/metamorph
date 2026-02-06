@@ -67,6 +67,15 @@ func InitUpstream(projectDir string) error {
 		}
 	}
 
+	// Set identity for the seed commit so it works in environments without
+	// a global git config (e.g. CI runners).
+	if _, err := git(seedDir, "config", "user.name", "metamorph"); err != nil {
+		return fmt.Errorf("gitops: failed to set user.name in seed clone: %w", err)
+	}
+	if _, err := git(seedDir, "config", "user.email", "metamorph@localhost"); err != nil {
+		return fmt.Errorf("gitops: failed to set user.email in seed clone: %w", err)
+	}
+
 	if _, err := git(seedDir, "add", "."); err != nil {
 		return fmt.Errorf("gitops: failed to stage seed files: %w", err)
 	}
