@@ -408,8 +408,16 @@ func TestGetStatus(t *testing.T) {
 	t.Run("marks stopped when PID is stale", func(t *testing.T) {
 		dir := t.TempDir()
 
-		// Write state saying "running".
-		state := &State{Status: "running", ProjectName: "proj"}
+		// Write state saying "running" with running agents.
+		state := &State{
+			Status:      "running",
+			ProjectName: "proj",
+			Agents: []AgentState{
+				{ID: 1, Role: "developer", Status: "running"},
+				{ID: 2, Role: "tester", Status: "running"},
+				{ID: 3, Role: "developer", Status: "error"},
+			},
+		}
 		_ = WriteState(dir, state)
 
 		// Write stale PID file.
@@ -423,6 +431,16 @@ func TestGetStatus(t *testing.T) {
 		}
 		if got.Status != "stopped" {
 			t.Errorf("Status = %q, want stopped (stale PID)", got.Status)
+		}
+		// Agents that were "running" should now be "stopped".
+		for _, a := range got.Agents {
+			if a.Status == "running" {
+				t.Errorf("agent-%d Status = %q, want stopped when daemon is dead", a.ID, a.Status)
+			}
+		}
+		// Agents in other states (e.g. "error") should be preserved.
+		if got.Agents[2].Status != "error" {
+			t.Errorf("agent-3 Status = %q, want error (should be preserved)", got.Agents[2].Status)
 		}
 	})
 

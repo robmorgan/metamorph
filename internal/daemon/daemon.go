@@ -205,6 +205,12 @@ func GetStatus(projectDir string) (*State, error) {
 	// Verify the daemon PID is actually alive.
 	if state.Status == "running" && !IsRunning(projectDir) {
 		state.Status = "stopped"
+		// Also mark all agents as stopped since the daemon is dead.
+		for i := range state.Agents {
+			if state.Agents[i].Status == "running" {
+				state.Agents[i].Status = "stopped"
+			}
+		}
 	}
 
 	return &state, nil
