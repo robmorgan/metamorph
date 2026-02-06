@@ -23,38 +23,38 @@ The alternative is parallelism: split the work across multiple agents that each 
 ## How It Works
 
 ```
-                          ┌──────────────────────────────┐
+                          ┌───────────────────────────────┐
                           │        metamorph CLI          │
                           │   init / start / stop / status│
-                          └──────────┬───────────────────┘
+                          └──────────┬────────────────────┘
                                      │
-                          ┌──────────▼───────────────────┐
+                          ┌──────────▼────────────────────┐
                           │     Background Daemon         │
                           │  (monitor loop every 30s)     │
                           │  - restart crashed agents     │
                           │  - clear stale task locks     │
                           │  - count commits & notify     │
                           │  - check logs for errors      │
-                          └──────────┬───────────────────┘
+                          └──────────┬────────────────────┘
                                      │
               ┌──────────────────────┼──────────────────────┐
               │                      │                      │
-    ┌─────────▼──────┐   ┌──────────▼─────┐   ┌────────────▼────┐
-    │  Docker Agent 1 │   │  Docker Agent 2 │   │  Docker Agent N  │
-    │  role: developer│   │  role: tester   │   │  role: refactorer│
-    └────────┬────────┘   └────────┬────────┘   └────────┬─────────┘
+    ┌─────────▼───────┐   ┌───────────▼─────┐   ┌────────────▼──────┐
+    │  Docker Agent 1 │   │  Docker Agent 2 │   │  Docker Agent N   │
+    │  role: developer│   │  role: tester   │   │  role: refactorer │
+    └────────┬────────┘   └────────┬────────┘   └────────┬──────────┘
              │                     │                     │
              └─────────────────────┼─────────────────────┘
                                    │
-                        ┌──────────▼──────────┐
-                        │  Bare Git Repo      │
-                        │  (.metamorph/       │
-                        │   upstream.git)     │
-                        │                     │
-                        │  current_tasks/*.lock│
-                        │  PROGRESS.md        │
-                        │  AGENT_PROMPT.md    │
-                        └─────────────────────┘
+                        ┌──────────▼────────────┐
+                        │  Bare Git Repo        │
+                        │  (.metamorph/         │
+                        │   upstream.git)       │
+                        │                       │
+                        │  current_tasks/*.lock │
+                        │  PROGRESS.md          │
+                        │  AGENT_PROMPT.md      │
+                        └───────────────────────┘
 ```
 
 Each agent runs in a loop:
