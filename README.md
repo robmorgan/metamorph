@@ -8,6 +8,8 @@
   </p>
 </p>
 
+## About
+
 MetaMorph is a server-first CLI that launches multiple headless Claude Code agents as Docker containers. Agents claim tasks via file locks, synchronize through git push conflicts, and restart automatically on crash. No orchestration agent — each Claude instance autonomously decides what to work on next.
 
 Based on [Anthropic's approach to building a C compiler](https://www.anthropic.com/engineering/building-c-compiler) where 16 agents built a 100,000-line compiler over 2 weeks.
