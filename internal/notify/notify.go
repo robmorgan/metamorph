@@ -46,7 +46,7 @@ func Send(webhookURL string, event Event) error {
 		slog.Error("notify: webhook request failed", "url", webhookURL, "error", err)
 		return fmt.Errorf("notify: webhook request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		slog.Error("notify: webhook returned error", "url", webhookURL, "status", resp.StatusCode)

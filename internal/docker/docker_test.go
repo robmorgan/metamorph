@@ -152,7 +152,7 @@ func TestStartAgent(t *testing.T) {
 	t.Run("creates and starts container with correct config", func(t *testing.T) {
 		projectDir := t.TempDir()
 		upstreamDir := filepath.Join(projectDir, ".metamorph", "upstream.git")
-		os.MkdirAll(upstreamDir, 0755)
+		_ = os.MkdirAll(upstreamDir, 0755)
 
 		mock := &mockDocker{
 			createResp: container.CreateResponse{ID: "container-abc123"},
@@ -237,7 +237,7 @@ func TestStartAgent(t *testing.T) {
 
 	t.Run("returns error on create failure", func(t *testing.T) {
 		projectDir := t.TempDir()
-		os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+		_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
 
 		mock := &mockDocker{createErr: fmt.Errorf("no space")}
 		c := newClientWithAPI("proj", mock)
@@ -253,7 +253,7 @@ func TestStartAgent(t *testing.T) {
 
 	t.Run("returns error on start failure", func(t *testing.T) {
 		projectDir := t.TempDir()
-		os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+		_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
 
 		mock := &mockDocker{
 			createResp: container.CreateResponse{ID: "cid"},
@@ -414,10 +414,10 @@ func TestGetLogs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetLogs: %v", err)
 		}
-		defer reader.Close()
+		defer func() { _ = reader.Close() }()
 
 		var buf bytes.Buffer
-		io.Copy(&buf, reader)
+		_, _ = io.Copy(&buf, reader)
 		if !strings.Contains(buf.String(), "line1") {
 			t.Errorf("expected log output containing 'line1', got %q", buf.String())
 		}
@@ -435,6 +435,110 @@ func TestGetLogs(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 	})
+}
+
+func TestContainerNamingConvention(t *testing.T) {
+	tests := []struct {
+		project string
+		agentID int
+		want    string
+	}{
+		{"myproj", 1, "metamorph-myproj-agent-1"},
+		{"myproj", 2, "metamorph-myproj-agent-2"},
+		{"web-app", 10, "metamorph-web-app-agent-10"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			projectDir := t.TempDir()
+			_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+
+			mock := &mockDocker{
+				createResp: container.CreateResponse{ID: "test-id"},
+			}
+			c := newClientWithAPI(tt.project, mock)
+
+			_, _ = c.StartAgent(context.Background(), AgentOpts{
+				ProjectDir: projectDir,
+				AgentID:    tt.agentID,
+			})
+
+			if len(mock.created) != 1 {
+				t.Fatalf("expected 1 create call, got %d", len(mock.created))
+			}
+			if mock.created[0].Name != tt.want {
+				t.Errorf("container name = %q, want %q", mock.created[0].Name, tt.want)
+			}
+		})
+	}
+}
+
+func TestStopAllAgents_CallsStopForEach(t *testing.T) {
+	mock := &mockDocker{
+		listResult: []types.Container{
+			{ID: "aaa0000000000000", Labels: map[string]string{labelProject: "proj", labelAgentID: "1"}},
+			{ID: "bbb0000000000000", Labels: map[string]string{labelProject: "proj", labelAgentID: "2"}},
+			{ID: "ccc0000000000000", Labels: map[string]string{labelProject: "proj", labelAgentID: "3"}},
+		},
+	}
+	c := newClientWithAPI("proj", mock)
+
+	if err := c.StopAllAgents(context.Background()); err != nil {
+		t.Fatalf("StopAllAgents: %v", err)
+	}
+
+	if len(mock.stopped) != 3 {
+		t.Errorf("expected 3 stops, got %d", len(mock.stopped))
+	}
+	if len(mock.removed) != 3 {
+		t.Errorf("expected 3 removes, got %d", len(mock.removed))
+	}
+}
+
+func TestStartAgent_PassesCorrectConfig(t *testing.T) {
+	projectDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+
+	mock := &mockDocker{
+		createResp: container.CreateResponse{ID: "cid-test"},
+	}
+	c := newClientWithAPI("test-proj", mock)
+
+	opts := AgentOpts{
+		ProjectDir: projectDir,
+		AgentID:    3,
+		Role:       "tester",
+		Model:      "claude-opus",
+		APIKey:     "sk-test-123",
+	}
+
+	_, err := c.StartAgent(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+
+	call := mock.created[0]
+	if call.Config.Image != defaultImageTag {
+		t.Errorf("image = %q, want %q", call.Config.Image, defaultImageTag)
+	}
+
+	envMap := map[string]string{}
+	for _, e := range call.Config.Env {
+		parts := strings.SplitN(e, "=", 2)
+		envMap[parts[0]] = parts[1]
+	}
+	if envMap["AGENT_ID"] != "3" {
+		t.Errorf("AGENT_ID = %q", envMap["AGENT_ID"])
+	}
+	if envMap["AGENT_ROLE"] != "tester" {
+		t.Errorf("AGENT_ROLE = %q", envMap["AGENT_ROLE"])
+	}
+	if envMap["AGENT_MODEL"] != "claude-opus" {
+		t.Errorf("AGENT_MODEL = %q", envMap["AGENT_MODEL"])
+	}
+	if envMap["ANTHROPIC_API_KEY"] != "sk-test-123" {
+		t.Errorf("ANTHROPIC_API_KEY = %q", envMap["ANTHROPIC_API_KEY"])
+	}
 }
 
 func TestDockerClientInterface(t *testing.T) {
@@ -482,8 +586,8 @@ func TestEnvValue(t *testing.T) {
 
 func TestCreateTarContext(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM ubuntu\n"), 0644)
-	os.WriteFile(filepath.Join(dir, "entrypoint.sh"), []byte("#!/bin/bash\n"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM ubuntu\n"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "entrypoint.sh"), []byte("#!/bin/bash\n"), 0644)
 
 	reader, err := createTarContext(dir)
 	if err != nil {
@@ -497,5 +601,71 @@ func TestCreateTarContext(t *testing.T) {
 
 	if buf.Len() == 0 {
 		t.Error("expected non-empty tar archive")
+	}
+}
+
+func TestStopAllAgents_StopError(t *testing.T) {
+	mock := &mockDocker{
+		listResult: []types.Container{
+			{ID: "aaa0000000000000", Labels: map[string]string{labelProject: "proj", labelAgentID: "1"}},
+		},
+		stopErr: fmt.Errorf("permission denied"),
+	}
+	c := newClientWithAPI("proj", mock)
+
+	err := c.StopAllAgents(context.Background())
+	if err == nil {
+		t.Fatal("expected error when stop fails")
+	}
+	if !strings.Contains(err.Error(), "errors stopping agents") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestStopAllAgents_RemoveError(t *testing.T) {
+	mock := &mockDocker{
+		listResult: []types.Container{
+			{ID: "aaa0000000000000", Labels: map[string]string{labelProject: "proj", labelAgentID: "1"}},
+		},
+		removeErr: fmt.Errorf("still running"),
+	}
+	c := newClientWithAPI("proj", mock)
+
+	err := c.StopAllAgents(context.Background())
+	if err == nil {
+		t.Fatal("expected error when remove fails")
+	}
+	if !strings.Contains(err.Error(), "errors stopping agents") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestListAgents_Error(t *testing.T) {
+	mock := &mockDocker{
+		listErr: fmt.Errorf("docker daemon not running"),
+	}
+	c := newClientWithAPI("proj", mock)
+
+	_, err := c.ListAgents(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "failed to list containers") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestStopAgent_StopError(t *testing.T) {
+	mock := &mockDocker{
+		listResult: []types.Container{
+			{ID: "cid-123", Labels: map[string]string{labelProject: "proj", labelAgentID: "1"}},
+		},
+		stopErr: fmt.Errorf("timeout"),
+	}
+	c := newClientWithAPI("proj", mock)
+
+	err := c.StopAgent(context.Background(), 1)
+	if err == nil {
+		t.Fatal("expected error when stop fails")
 	}
 }

@@ -48,7 +48,7 @@ var statusCmd = &cobra.Command{
 
 		if len(state.Agents) > 0 {
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "AGENT\tROLE\tSTATUS\tTASK\tLAST ACTIVITY")
+			_, _ = fmt.Fprintln(w, "AGENT\tROLE\tSTATUS\tTASK\tLAST ACTIVITY")
 			for _, a := range state.Agents {
 				task := "-"
 				if a.CurrentTask != nil {
@@ -58,9 +58,9 @@ var statusCmd = &cobra.Command{
 				if !a.LastActivity.IsZero() {
 					lastAct = formatRelativeTime(a.LastActivity)
 				}
-				fmt.Fprintf(w, "agent-%d\t%s\t%s\t%s\t%s\n", a.ID, a.Role, a.Status, task, lastAct)
+				_, _ = fmt.Fprintf(w, "agent-%d\t%s\t%s\t%s\t%s\n", a.ID, a.Role, a.Status, task, lastAct)
 			}
-			w.Flush()
+			_ = w.Flush()
 			fmt.Println()
 		}
 

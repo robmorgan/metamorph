@@ -26,10 +26,13 @@ import (
 )
 
 const (
-	defaultImageTag = "metamorph-agent:latest"
-	labelProject    = "metamorph.project"
-	labelAgentID    = "metamorph.agent-id"
-	stopTimeout     = 30 // seconds
+	defaultImageTag  = "metamorph-agent:latest"
+	labelProject     = "metamorph.project"
+	labelAgentID     = "metamorph.agent-id"
+	stopTimeout      = 30 // seconds
+	buildTimeout     = 60 * time.Second
+	startStopTimeout = 30 * time.Second
+	listTimeout      = 10 * time.Second
 )
 
 // AgentOpts configures a new agent container.
@@ -127,7 +130,10 @@ func (c *Client) BuildImage(projectDir string) error {
 		return fmt.Errorf("docker: failed to create build context: %w", err)
 	}
 
-	resp, err := c.cli.ImageBuild(context.Background(), buildCtx, types.ImageBuildOptions{
+	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
+	defer cancel()
+
+	resp, err := c.cli.ImageBuild(ctx, buildCtx, types.ImageBuildOptions{
 		Tags:       []string{defaultImageTag},
 		Dockerfile: "Dockerfile",
 		Remove:     true,
@@ -135,7 +141,7 @@ func (c *Client) BuildImage(projectDir string) error {
 	if err != nil {
 		return fmt.Errorf("docker: failed to build image: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Drain the build output (required for build to complete).
 	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
@@ -147,6 +153,9 @@ func (c *Client) BuildImage(projectDir string) error {
 
 // StartAgent creates and starts a container for the given agent.
 func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, startStopTimeout)
+	defer cancel()
+
 	containerName := fmt.Sprintf("metamorph-%s-agent-%d", c.projectName, opts.AgentID)
 	agentIDStr := strconv.Itoa(opts.AgentID)
 
@@ -211,6 +220,9 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 
 // StopAgent stops and removes the container for the given agent.
 func (c *Client) StopAgent(ctx context.Context, agentID int) error {
+	ctx, cancel := context.WithTimeout(ctx, startStopTimeout)
+	defer cancel()
+
 	containerID, err := c.findContainer(ctx, agentID)
 	if err != nil {
 		return err
@@ -230,6 +242,9 @@ func (c *Client) StopAgent(ctx context.Context, agentID int) error {
 
 // StopAllAgents stops and removes all containers for this project.
 func (c *Client) StopAllAgents(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, startStopTimeout)
+	defer cancel()
+
 	containers, err := c.listProjectContainers(ctx)
 	if err != nil {
 		return err
@@ -255,6 +270,9 @@ func (c *Client) StopAllAgents(ctx context.Context) error {
 
 // ListAgents returns info about all running agent containers for this project.
 func (c *Client) ListAgents(ctx context.Context) ([]AgentInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, listTimeout)
+	defer cancel()
+
 	containers, err := c.listProjectContainers(ctx)
 	if err != nil {
 		return nil, err
@@ -311,7 +329,7 @@ func (c *Client) GetLogs(ctx context.Context, agentID int, tail int, follow bool
 	pr, pw := io.Pipe()
 	go func() {
 		_, err := stdcopy.StdCopy(pw, pw, logReader)
-		logReader.Close()
+		_ = logReader.Close()
 		pw.CloseWithError(err)
 	}()
 
@@ -379,7 +397,7 @@ func createTarContext(dir string) (io.Reader, error) {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		_, err = io.Copy(tw, f)
 		return err

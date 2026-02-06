@@ -82,22 +82,22 @@ var logsCmd = &cobra.Command{
 
 				info, err := f.Stat()
 				if err != nil {
-					f.Close()
+					_ = f.Close()
 					continue
 				}
 
 				if info.Size() <= offset {
-					f.Close()
+					_ = f.Close()
 					continue
 				}
 
 				if _, err := f.Seek(offset, io.SeekStart); err != nil {
-					f.Close()
+					_ = f.Close()
 					continue
 				}
 
 				newData, err := io.ReadAll(f)
-				f.Close()
+				_ = f.Close()
 				if err != nil {
 					continue
 				}

@@ -115,7 +115,7 @@ func Start(projectDir string, cfg *config.Config, apiKey string) error {
 	}
 
 	// Release the child so it outlives us.
-	cmd.Process.Release()
+	_ = cmd.Process.Release()
 
 	// Wait for state.json to appear.
 	statePath := filepath.Join(projectDir, constants.StateFile)
@@ -141,13 +141,13 @@ func Stop(projectDir string) error {
 
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		os.Remove(pidPath)
+		_ = os.Remove(pidPath)
 		return fmt.Errorf("daemon: process %d not found: %w", pid, err)
 	}
 
 	// Send SIGTERM.
 	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		os.Remove(pidPath)
+		_ = os.Remove(pidPath)
 		return fmt.Errorf("daemon: failed to send SIGTERM: %w", err)
 	}
 
@@ -155,16 +155,16 @@ func Stop(projectDir string) error {
 	deadline := time.Now().Add(shutdownTimeout)
 	for time.Now().Before(deadline) {
 		if !processAlive(pid) {
-			os.Remove(pidPath)
+			_ = os.Remove(pidPath)
 			return nil
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
 	// Force kill.
-	proc.Signal(syscall.SIGKILL)
+	_ = proc.Signal(syscall.SIGKILL)
 	time.Sleep(time.Second)
-	os.Remove(pidPath)
+	_ = os.Remove(pidPath)
 
 	return nil
 }
@@ -289,8 +289,14 @@ func (d *Daemon) startAgents(ctx context.Context) ([]AgentState, error) {
 	return agents, nil
 }
 
-// monitor runs one iteration of the monitoring loop.
+// monitor runs one iteration of the monitoring loop, recovering from panics.
 func (d *Daemon) monitor(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("panic in monitor loop (recovered)", "panic", r)
+		}
+	}()
+
 	now := time.Now().UTC()
 
 	// List running containers.
@@ -319,11 +325,11 @@ func (d *Daemon) monitor(ctx context.Context) {
 	d.state.Stats.UptimeSeconds = int(now.Sub(d.startedAt).Seconds())
 
 	// Write state atomically.
-	d.writeState()
+	_ = d.writeState()
 
 	// Write heartbeat.
 	heartbeatPath := filepath.Join(d.projectDir, constants.HeartbeatFile)
-	os.WriteFile(heartbeatPath, []byte(now.Format(time.RFC3339)), 0644)
+	_ = os.WriteFile(heartbeatPath, []byte(now.Format(time.RFC3339)), 0644)
 }
 
 // updateAgentStates syncs container status into agent state.
@@ -360,7 +366,7 @@ func (d *Daemon) restartCrashedAgents(ctx context.Context, infos []docker.AgentI
 		}
 
 		// Try to stop cleanly first (removes exited container).
-		d.docker.StopAgent(ctx, a.ID)
+		_ = d.docker.StopAgent(ctx, a.ID)
 
 		// Restart.
 		containerID, err := d.docker.StartAgent(ctx, docker.AgentOpts{
@@ -575,15 +581,15 @@ func (d *Daemon) sendEvent(event notify.Event) {
 
 // shutdown stops all agents and writes final state.
 func (d *Daemon) shutdown(ctx context.Context) error {
-	d.docker.StopAllAgents(ctx)
+	_ = d.docker.StopAllAgents(ctx)
 
 	d.state.Status = "stopped"
 	d.state.Stats.UptimeSeconds = int(time.Since(d.startedAt).Seconds())
-	d.writeState()
+	_ = d.writeState()
 
 	// Remove PID file.
 	pidPath := filepath.Join(d.projectDir, constants.DaemonPIDFile)
-	os.Remove(pidPath)
+	_ = os.Remove(pidPath)
 
 	return nil
 }
@@ -612,7 +618,7 @@ func WriteState(projectDir string, state *State) error {
 	}
 
 	if err := os.Rename(tmpPath, statePath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("daemon: failed to rename state: %w", err)
 	}
 
@@ -637,7 +643,7 @@ func cleanOrphans(projectDir string, projectName string) error {
 	}
 
 	if len(agents) > 0 {
-		dc.StopAllAgents(context.Background())
+		_ = dc.StopAllAgents(context.Background())
 	}
 
 	return nil
@@ -656,7 +662,7 @@ func CleanOrphansWithClient(projectDir string, dc docker.DockerClient) error {
 	}
 
 	if len(agents) > 0 {
-		dc.StopAllAgents(context.Background())
+		_ = dc.StopAllAgents(context.Background())
 	}
 
 	return nil

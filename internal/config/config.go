@@ -53,11 +53,20 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
+	applyDefaults(&cfg)
+
 	if err := validate(&cfg); err != nil {
 		return nil, err
 	}
 
 	return &cfg, nil
+}
+
+// applyDefaults fills in default values for optional fields.
+func applyDefaults(cfg *Config) {
+	if cfg.Docker.Image == "" {
+		cfg.Docker.Image = "metamorph-agent:latest"
+	}
 }
 
 func validate(cfg *Config) error {

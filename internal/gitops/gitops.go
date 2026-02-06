@@ -43,7 +43,7 @@ func InitUpstream(projectDir string) error {
 	if err != nil {
 		return fmt.Errorf("gitops: failed to create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	if _, err := git(tmpDir, "clone", upstreamPath, "seed"); err != nil {
 		return fmt.Errorf("gitops: failed to clone for seeding: %w", err)

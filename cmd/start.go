@@ -33,9 +33,9 @@ func init() {
 	startCmd.Flags().Bool("daemon-mode", false, "Run as daemon (internal)")
 	startCmd.Flags().String("project-dir", "", "Project directory (internal)")
 	startCmd.Flags().String("api-key", "", "API key (internal)")
-	startCmd.Flags().MarkHidden("daemon-mode")
-	startCmd.Flags().MarkHidden("project-dir")
-	startCmd.Flags().MarkHidden("api-key")
+	_ = startCmd.Flags().MarkHidden("daemon-mode")
+	_ = startCmd.Flags().MarkHidden("project-dir")
+	_ = startCmd.Flags().MarkHidden("api-key")
 
 	rootCmd.AddCommand(startCmd)
 }
@@ -129,11 +129,11 @@ func runForegroundStart(cmd *cobra.Command) error {
 	fmt.Printf("\nDaemon running (PID in .metamorph/daemon.pid)\n\n")
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "AGENT\tROLE\tSTATUS")
+	_, _ = fmt.Fprintln(w, "AGENT\tROLE\tSTATUS")
 	for _, a := range state.Agents {
-		fmt.Fprintf(w, "agent-%d\t%s\t%s\n", a.ID, a.Role, a.Status)
+		_, _ = fmt.Fprintf(w, "agent-%d\t%s\t%s\n", a.ID, a.Role, a.Status)
 	}
-	w.Flush()
+	_ = w.Flush()
 
 	fmt.Printf("\nUse 'metamorph status' to monitor, 'metamorph stop' to stop.\n")
 

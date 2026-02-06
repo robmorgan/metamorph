@@ -59,17 +59,17 @@ var tasksCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "TASK\tAGENT\tCLAIMED AT\tDURATION")
+		_, _ = fmt.Fprintln(w, "TASK\tAGENT\tCLAIMED AT\tDURATION")
 		for _, lock := range locks {
 			duration := time.Since(lock.ClaimedAt).Truncate(time.Second)
-			fmt.Fprintf(w, "%s\tagent-%d\t%s\t%s\n",
+			_, _ = fmt.Fprintf(w, "%s\tagent-%d\t%s\t%s\n",
 				lock.Name,
 				lock.AgentID,
 				lock.ClaimedAt.Local().Format("2006-01-02 15:04:05"),
 				duration.String(),
 			)
 		}
-		w.Flush()
+		_ = w.Flush()
 
 		return nil
 	},

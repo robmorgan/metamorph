@@ -14,10 +14,11 @@ import (
 var verbose bool
 
 var rootCmd = &cobra.Command{
-	Use:          "metamorph",
-	Short:        "Metamorph - AI-powered parallel development agents",
-	Long:         "Metamorph orchestrates multiple AI coding agents working in parallel on your codebase.",
-	SilenceUsage: true,
+	Use:           "metamorph",
+	Short:         "Metamorph - AI-powered parallel development agents",
+	Long:          "Metamorph orchestrates multiple AI coding agents working in parallel on your codebase.",
+	SilenceUsage:  true,
+	SilenceErrors: true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		level := slog.LevelInfo
 		if verbose {
@@ -35,6 +36,7 @@ func init() {
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 }

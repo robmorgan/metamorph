@@ -48,7 +48,7 @@ var runCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to create temp dir: %w", err)
 		}
-		defer os.RemoveAll(tmpDir)
+		defer func() { _ = os.RemoveAll(tmpDir) }()
 
 		agentDir := filepath.Join(tmpDir, "agent-work")
 		if err := gitops.CloneForAgent(upstreamPath, 0, agentDir); err != nil {
@@ -68,7 +68,7 @@ var runCmd = &cobra.Command{
 				// Pull latest changes.
 				pullCmd := exec.Command("git", "pull", "--rebase", "origin", "HEAD")
 				pullCmd.Dir = agentDir
-				pullCmd.Run() // best effort
+				_ = pullCmd.Run() // best effort
 
 				// Read the agent prompt and expand ${VAR} placeholders.
 				promptPath := filepath.Join(agentDir, constants.AgentPromptFile)

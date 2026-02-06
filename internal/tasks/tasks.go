@@ -59,10 +59,10 @@ func ClaimTask(repoDir string, taskName string, agentID int) (bool, error) {
 		// Check if this is a push rejection (another agent won the race).
 		if strings.Contains(stderr, "rejected") || strings.Contains(stderr, "conflict") {
 			// Roll back: remove lock file and reset.
-			os.Remove(lockFile)
-			git(repoDir, "checkout", "--", lockDir+"/")
-			git(repoDir, "reset", "--hard", "HEAD~1")
-			git(repoDir, "pull", "--rebase", "origin", "main")
+			_ = os.Remove(lockFile)
+			_, _, _ = git(repoDir, "checkout", "--", lockDir+"/")
+			_, _, _ = git(repoDir, "reset", "--hard", "HEAD~1")
+			_, _, _ = git(repoDir, "pull", "--rebase", "origin", "main")
 			return false, nil
 		}
 		return false, fmt.Errorf("tasks: failed to push lock file: %w", err)

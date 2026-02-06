@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/brightfame/metamorph/internal/config"
 	"github.com/brightfame/metamorph/internal/constants"
 	"github.com/brightfame/metamorph/internal/docker"
+	"github.com/brightfame/metamorph/internal/notify"
 )
 
 // mockDockerClient implements docker.DockerClient for daemon tests.
@@ -71,7 +73,7 @@ func (m *mockDockerClient) GetLogs(ctx context.Context, agentID int, tail int, f
 func TestWriteState(t *testing.T) {
 	t.Run("writes valid JSON to state.json", func(t *testing.T) {
 		dir := t.TempDir()
-		os.MkdirAll(filepath.Join(dir, ".metamorph"), 0755)
+		_ = os.MkdirAll(filepath.Join(dir, ".metamorph"), 0755)
 
 		taskName := "implement-auth"
 		state := &State{
@@ -172,7 +174,7 @@ func TestWriteState(t *testing.T) {
 		// Read back.
 		data, _ := os.ReadFile(filepath.Join(dir, constants.StateFile))
 		var got State
-		json.Unmarshal(data, &got)
+		_ = json.Unmarshal(data, &got)
 		if got.Status != "stopped" || got.ProjectName != "v2" {
 			t.Errorf("got Status=%q ProjectName=%q, want stopped/v2", got.Status, got.ProjectName)
 		}
@@ -181,7 +183,7 @@ func TestWriteState(t *testing.T) {
 	t.Run("no temp file left behind", func(t *testing.T) {
 		dir := t.TempDir()
 		state := &State{Status: "running"}
-		WriteState(dir, state)
+		_ = WriteState(dir, state)
 
 		tmpPath := filepath.Join(dir, constants.StateFile+".tmp")
 		if _, err := os.Stat(tmpPath); err == nil {
@@ -258,7 +260,7 @@ func TestReadPID(t *testing.T) {
 	t.Run("reads valid PID", func(t *testing.T) {
 		dir := t.TempDir()
 		pidPath := filepath.Join(dir, "test.pid")
-		os.WriteFile(pidPath, []byte("12345"), 0644)
+		_ = os.WriteFile(pidPath, []byte("12345"), 0644)
 
 		pid, err := readPID(pidPath)
 		if err != nil {
@@ -272,7 +274,7 @@ func TestReadPID(t *testing.T) {
 	t.Run("handles whitespace and newline", func(t *testing.T) {
 		dir := t.TempDir()
 		pidPath := filepath.Join(dir, "test.pid")
-		os.WriteFile(pidPath, []byte("  67890\n"), 0644)
+		_ = os.WriteFile(pidPath, []byte("  67890\n"), 0644)
 
 		pid, err := readPID(pidPath)
 		if err != nil {
@@ -296,7 +298,7 @@ func TestReadPID(t *testing.T) {
 	t.Run("returns error for invalid content", func(t *testing.T) {
 		dir := t.TempDir()
 		pidPath := filepath.Join(dir, "test.pid")
-		os.WriteFile(pidPath, []byte("not-a-number"), 0644)
+		_ = os.WriteFile(pidPath, []byte("not-a-number"), 0644)
 
 		_, err := readPID(pidPath)
 		if err == nil {
@@ -310,7 +312,7 @@ func TestReadPID(t *testing.T) {
 	t.Run("returns error for empty file", func(t *testing.T) {
 		dir := t.TempDir()
 		pidPath := filepath.Join(dir, "test.pid")
-		os.WriteFile(pidPath, []byte(""), 0644)
+		_ = os.WriteFile(pidPath, []byte(""), 0644)
 
 		_, err := readPID(pidPath)
 		if err == nil {
@@ -339,11 +341,11 @@ func TestIsRunning(t *testing.T) {
 	t.Run("returns true when PID file has live process", func(t *testing.T) {
 		dir := t.TempDir()
 		pidDir := filepath.Join(dir, ".metamorph")
-		os.MkdirAll(pidDir, 0755)
+		_ = os.MkdirAll(pidDir, 0755)
 
 		pidPath := filepath.Join(dir, constants.DaemonPIDFile)
-		os.MkdirAll(filepath.Dir(pidPath), 0755)
-		os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644)
+		_ = os.MkdirAll(filepath.Dir(pidPath), 0755)
+		_ = os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644)
 
 		if !IsRunning(dir) {
 			t.Error("expected IsRunning = true for current process PID")
@@ -360,9 +362,9 @@ func TestIsRunning(t *testing.T) {
 	t.Run("returns false when PID is stale", func(t *testing.T) {
 		dir := t.TempDir()
 		pidPath := filepath.Join(dir, constants.DaemonPIDFile)
-		os.MkdirAll(filepath.Dir(pidPath), 0755)
+		_ = os.MkdirAll(filepath.Dir(pidPath), 0755)
 		// Use a PID that almost certainly doesn't exist.
-		os.WriteFile(pidPath, []byte("999999"), 0644)
+		_ = os.WriteFile(pidPath, []byte("999999"), 0644)
 
 		if IsRunning(dir) {
 			t.Skip("PID 999999 unexpectedly exists")
@@ -384,12 +386,12 @@ func TestGetStatus(t *testing.T) {
 				{ID: 1, Role: "developer", Status: "running"},
 			},
 		}
-		WriteState(dir, state)
+		_ = WriteState(dir, state)
 
 		// Write PID file with our own PID (so it looks alive).
 		pidPath := filepath.Join(dir, constants.DaemonPIDFile)
-		os.MkdirAll(filepath.Dir(pidPath), 0755)
-		os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644)
+		_ = os.MkdirAll(filepath.Dir(pidPath), 0755)
+		_ = os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644)
 
 		got, err := GetStatus(dir)
 		if err != nil {
@@ -408,12 +410,12 @@ func TestGetStatus(t *testing.T) {
 
 		// Write state saying "running".
 		state := &State{Status: "running", ProjectName: "proj"}
-		WriteState(dir, state)
+		_ = WriteState(dir, state)
 
 		// Write stale PID file.
 		pidPath := filepath.Join(dir, constants.DaemonPIDFile)
-		os.MkdirAll(filepath.Dir(pidPath), 0755)
-		os.WriteFile(pidPath, []byte("999999"), 0644)
+		_ = os.MkdirAll(filepath.Dir(pidPath), 0755)
+		_ = os.WriteFile(pidPath, []byte("999999"), 0644)
 
 		got, err := GetStatus(dir)
 		if err != nil {
@@ -439,8 +441,8 @@ func TestGetStatus(t *testing.T) {
 	t.Run("returns error for corrupt JSON", func(t *testing.T) {
 		dir := t.TempDir()
 		statePath := filepath.Join(dir, constants.StateFile)
-		os.MkdirAll(filepath.Dir(statePath), 0755)
-		os.WriteFile(statePath, []byte("{invalid json"), 0644)
+		_ = os.MkdirAll(filepath.Dir(statePath), 0755)
+		_ = os.WriteFile(statePath, []byte("{invalid json"), 0644)
 
 		_, err := GetStatus(dir)
 		if err == nil {
@@ -496,8 +498,8 @@ func TestCleanOrphansWithClient(t *testing.T) {
 
 		// Write PID file with our own PID.
 		pidPath := filepath.Join(dir, constants.DaemonPIDFile)
-		os.MkdirAll(filepath.Dir(pidPath), 0755)
-		os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644)
+		_ = os.MkdirAll(filepath.Dir(pidPath), 0755)
+		_ = os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644)
 
 		mock := &mockDockerClient{}
 
@@ -698,6 +700,247 @@ func TestStartAgents(t *testing.T) {
 	})
 }
 
+// --- Monitor Panic Recovery Tests ---
+
+// panicDockerClient is a mock that panics on ListAgents to test recovery.
+type panicDockerClient struct {
+	mockDockerClient
+}
+
+func (p *panicDockerClient) ListAgents(ctx context.Context) ([]docker.AgentInfo, error) {
+	panic("simulated panic in ListAgents")
+}
+
+func TestMonitorRecoversPanic(t *testing.T) {
+	dir := t.TempDir()
+
+	d := &Daemon{
+		projectDir:        dir,
+		docker:            &panicDockerClient{},
+		startedAt:         time.Now().UTC(),
+		lastErrorNotified: make(map[int]time.Time),
+		cfg: &config.Config{
+			Project: config.ProjectConfig{Name: "test"},
+		},
+		state: &State{
+			Status: "running",
+			Agents: []AgentState{
+				{ID: 1, Role: "developer", Status: "running"},
+			},
+		},
+	}
+
+	// monitor() should recover from panic and not crash.
+	d.monitor(context.Background())
+
+	// If we get here, the panic was recovered.
+	if d.state.Status != "running" {
+		t.Errorf("Status = %q, want running (panic should be recovered)", d.state.Status)
+	}
+}
+
+// --- restartCrashedAgents Tests ---
+
+func TestRestartCrashedAgents(t *testing.T) {
+	t.Run("restarts stopped agents", func(t *testing.T) {
+		mock := &mockDockerClient{
+			startAgents: make(map[int]string),
+		}
+
+		d := &Daemon{
+			projectDir:        t.TempDir(),
+			docker:            mock,
+			lastErrorNotified: make(map[int]time.Time),
+			cfg: &config.Config{
+				Project: config.ProjectConfig{Name: "test"},
+				Agents:  config.AgentsConfig{Model: "claude-sonnet"},
+			},
+			state: &State{
+				Agents: []AgentState{
+					{ID: 1, Role: "developer", Status: "running"},
+					{ID: 2, Role: "tester", Status: "running"},
+				},
+			},
+		}
+
+		// Only agent 1 is reported as running; agent 2 has crashed.
+		infos := []docker.AgentInfo{
+			{ID: 1, Status: "Up 1 hour"},
+		}
+
+		d.restartCrashedAgents(context.Background(), infos)
+
+		// Agent 2 should have been restarted.
+		if len(mock.stopCalls) == 0 {
+			t.Error("expected StopAgent to be called for crashed agent")
+		}
+		if _, ok := mock.startAgents[2]; !ok {
+			t.Error("expected StartAgent to be called for agent-2")
+		}
+	})
+}
+
+// --- countCommitsAndNotify Tests ---
+
+func TestCountCommitsAndNotify(t *testing.T) {
+	// This test requires a git repo to count commits. Create one.
+	dir := t.TempDir()
+	upstreamPath := filepath.Join(dir, ".metamorph", "upstream.git")
+	_ = os.MkdirAll(upstreamPath, 0755)
+
+	// Init a non-bare repo with a commit so rev-list works.
+	gitInit := func(d string, args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = d
+		_ = cmd.Run()
+	}
+	gitInit(upstreamPath, "init")
+	gitInit(upstreamPath, "config", "user.name", "test")
+	gitInit(upstreamPath, "config", "user.email", "test@test")
+	_ = os.WriteFile(filepath.Join(upstreamPath, "f.txt"), []byte("data"), 0644)
+	gitInit(upstreamPath, "add", ".")
+	gitInit(upstreamPath, "commit", "-m", "c1")
+
+	d := &Daemon{
+		projectDir:        dir,
+		lastErrorNotified: make(map[int]time.Time),
+		cfg: &config.Config{
+			Project: config.ProjectConfig{Name: "test"},
+		},
+		state: &State{},
+	}
+
+	d.countCommitsAndNotify(time.Now().UTC())
+
+	if d.state.Stats.TotalCommits != 1 {
+		t.Errorf("TotalCommits = %d, want 1", d.state.Stats.TotalCommits)
+	}
+	if d.prevCommitCount != 1 {
+		t.Errorf("prevCommitCount = %d, want 1", d.prevCommitCount)
+	}
+}
+
+// --- checkAgentLogs Tests ---
+
+func TestCheckAgentLogs(t *testing.T) {
+	dir := t.TempDir()
+	logDir := filepath.Join(dir, "agent_logs", "agent-1")
+	_ = os.MkdirAll(logDir, 0755)
+
+	// Write a log file with an ERROR line.
+	_ = os.WriteFile(filepath.Join(logDir, "session-1.log"), []byte("line1\nERROR: test failed\nline3\n"), 0644)
+
+	d := &Daemon{
+		projectDir:        dir,
+		lastErrorNotified: make(map[int]time.Time),
+		cfg: &config.Config{
+			Project:       config.ProjectConfig{Name: "test"},
+			Notifications: config.NotificationsConfig{WebhookURL: ""},
+		},
+		state: &State{
+			Agents: []AgentState{
+				{ID: 1, Role: "developer"},
+			},
+		},
+	}
+
+	d.checkAgentLogs(time.Now().UTC())
+
+	// Should have recorded the notification time (debounce).
+	if _, ok := d.lastErrorNotified[1]; !ok {
+		t.Error("expected lastErrorNotified to be set for agent 1")
+	}
+}
+
+func TestCheckAgentLogsDebounce(t *testing.T) {
+	dir := t.TempDir()
+	logDir := filepath.Join(dir, "agent_logs", "agent-1")
+	_ = os.MkdirAll(logDir, 0755)
+	_ = os.WriteFile(filepath.Join(logDir, "session-1.log"), []byte("ERROR: something\n"), 0644)
+
+	d := &Daemon{
+		projectDir: dir,
+		lastErrorNotified: map[int]time.Time{
+			1: time.Now().UTC(), // Already notified just now.
+		},
+		cfg: &config.Config{
+			Project: config.ProjectConfig{Name: "test"},
+		},
+		state: &State{
+			Agents: []AgentState{
+				{ID: 1, Role: "developer"},
+			},
+		},
+	}
+
+	before := d.lastErrorNotified[1]
+	d.checkAgentLogs(time.Now().UTC())
+
+	// Should not have updated the notification time (debounced).
+	if !d.lastErrorNotified[1].Equal(before) {
+		t.Error("expected lastErrorNotified to remain unchanged (debounced)")
+	}
+}
+
+// --- flushCommitBatch Tests ---
+
+func TestFlushCommitBatch(t *testing.T) {
+	t.Run("no-op when no pending commits", func(t *testing.T) {
+		d := &Daemon{
+			pendingCommits: nil,
+			cfg: &config.Config{
+				Project: config.ProjectConfig{Name: "test"},
+			},
+		}
+		d.flushCommitBatch(time.Now().UTC())
+		// Should not panic.
+	})
+
+	t.Run("does not flush before window elapses", func(t *testing.T) {
+		d := &Daemon{
+			pendingCommits:   []string{"commit1"},
+			commitBatchStart: time.Now().UTC(),
+			cfg: &config.Config{
+				Project:       config.ProjectConfig{Name: "test"},
+				Notifications: config.NotificationsConfig{WebhookURL: ""},
+			},
+		}
+		d.flushCommitBatch(time.Now().UTC())
+		if d.pendingCommits == nil {
+			t.Error("should not have flushed yet")
+		}
+	})
+
+	t.Run("flushes after window elapses", func(t *testing.T) {
+		d := &Daemon{
+			pendingCommits:   []string{"commit1", "commit2"},
+			commitBatchStart: time.Now().UTC().Add(-2 * time.Minute),
+			cfg: &config.Config{
+				Project:       config.ProjectConfig{Name: "test"},
+				Notifications: config.NotificationsConfig{WebhookURL: ""},
+			},
+		}
+		d.flushCommitBatch(time.Now().UTC())
+		if d.pendingCommits != nil {
+			t.Error("expected pending commits to be cleared after flush")
+		}
+	})
+}
+
+// --- sendEvent Tests ---
+
+func TestSendEvent(t *testing.T) {
+	t.Run("no-op when webhook URL is empty", func(t *testing.T) {
+		d := &Daemon{
+			cfg: &config.Config{
+				Notifications: config.NotificationsConfig{WebhookURL: ""},
+			},
+		}
+		// Should not panic.
+		d.sendEvent(notify.Event{Type: notify.EventAgentCrashed})
+	})
+}
+
 // --- shutdown Tests ---
 
 func TestShutdown(t *testing.T) {
@@ -719,8 +962,8 @@ func TestShutdown(t *testing.T) {
 
 		// Write a PID file to verify it gets removed.
 		pidPath := filepath.Join(dir, constants.DaemonPIDFile)
-		os.MkdirAll(filepath.Dir(pidPath), 0755)
-		os.WriteFile(pidPath, []byte("12345"), 0644)
+		_ = os.MkdirAll(filepath.Dir(pidPath), 0755)
+		_ = os.WriteFile(pidPath, []byte("12345"), 0644)
 
 		if err := d.shutdown(context.Background()); err != nil {
 			t.Fatalf("shutdown: %v", err)
@@ -750,7 +993,7 @@ func TestShutdown(t *testing.T) {
 			t.Fatalf("state file not written: %v", err)
 		}
 		var got State
-		json.Unmarshal(data, &got)
+		_ = json.Unmarshal(data, &got)
 		if got.Status != "stopped" {
 			t.Errorf("persisted Status = %q, want stopped", got.Status)
 		}
