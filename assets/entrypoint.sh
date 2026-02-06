@@ -14,9 +14,11 @@ while true; do
 
   git pull --rebase origin main 2>&1 | tee -a "$LOG_FILE"
 
+  envsubst < AGENT_PROMPT.md > /tmp/agent_prompt.md
+
   claude --dangerously-skip-permissions \
     --model "${AGENT_MODEL}" \
-    -p "$(cat AGENT_PROMPT.md)" \
+    -p "$(cat /tmp/agent_prompt.md)" \
     2>&1 | tee -a "$LOG_FILE" || true
 
   echo "[$(date)] Session $SESSION ended, restarting in 5s..." | tee -a "$LOG_FILE"

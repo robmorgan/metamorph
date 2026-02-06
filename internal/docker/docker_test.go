@@ -108,14 +108,8 @@ func (m *mockDocker) ContainerLogs(ctx context.Context, ctr string, options cont
 }
 
 func TestBuildImage(t *testing.T) {
-	t.Run("copies assets and calls build", func(t *testing.T) {
+	t.Run("writes embedded assets and calls build", func(t *testing.T) {
 		projectDir := t.TempDir()
-
-		// Create assets.
-		assetsDir := filepath.Join(projectDir, "assets")
-		os.MkdirAll(assetsDir, 0755)
-		os.WriteFile(filepath.Join(assetsDir, "Dockerfile"), []byte("FROM ubuntu:24.04\n"), 0644)
-		os.WriteFile(filepath.Join(assetsDir, "entrypoint.sh"), []byte("#!/bin/bash\n"), 0644)
 
 		mock := &mockDocker{buildBody: `{"stream":"Successfully built abc123"}`}
 		c := newClientWithAPI("test-project", mock)
@@ -124,35 +118,22 @@ func TestBuildImage(t *testing.T) {
 			t.Fatalf("BuildImage: %v", err)
 		}
 
-		// Verify files were copied to .metamorph/docker/.
+		// Verify embedded files were written to .metamorph/docker/.
 		for _, name := range []string{"Dockerfile", "entrypoint.sh"} {
 			path := filepath.Join(projectDir, ".metamorph", "docker", name)
-			if _, err := os.Stat(path); err != nil {
+			data, err := os.ReadFile(path)
+			if err != nil {
 				t.Errorf("expected %s in build dir: %v", name, err)
+				continue
 			}
-		}
-	})
-
-	t.Run("returns error when assets missing", func(t *testing.T) {
-		projectDir := t.TempDir()
-		mock := &mockDocker{}
-		c := newClientWithAPI("test-project", mock)
-
-		err := c.BuildImage(projectDir)
-		if err == nil {
-			t.Fatal("expected error for missing assets")
-		}
-		if !strings.Contains(err.Error(), "failed to read") {
-			t.Errorf("unexpected error: %v", err)
+			if len(data) == 0 {
+				t.Errorf("expected %s to have content", name)
+			}
 		}
 	})
 
 	t.Run("returns error when build fails", func(t *testing.T) {
 		projectDir := t.TempDir()
-		assetsDir := filepath.Join(projectDir, "assets")
-		os.MkdirAll(assetsDir, 0755)
-		os.WriteFile(filepath.Join(assetsDir, "Dockerfile"), []byte("FROM ubuntu\n"), 0644)
-		os.WriteFile(filepath.Join(assetsDir, "entrypoint.sh"), []byte("#!/bin/bash\n"), 0644)
 
 		mock := &mockDocker{buildErr: fmt.Errorf("build failed")}
 		c := newClientWithAPI("test-project", mock)

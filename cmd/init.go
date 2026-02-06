@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/brightfame/metamorph/assets"
 	"github.com/brightfame/metamorph/internal/constants"
 	"github.com/brightfame/metamorph/internal/gitops"
 	"github.com/spf13/cobra"
@@ -65,42 +66,9 @@ webhook_url = ""
 		}
 		fmt.Println("  Created metamorph.toml")
 
-		// Write AGENT_PROMPT.md.
+		// Write AGENT_PROMPT.md from embedded template.
 		agentPromptPath := filepath.Join(absDir, constants.AgentPromptFile)
-		agentPromptContent := `# Agent Prompt
-
-You are a software development agent working on this project. Your role will be assigned to you as an environment variable.
-
-## Guidelines
-
-1. **Read before writing** — Always understand existing code before modifying it.
-2. **Small, focused changes** — Each commit should do one thing well.
-3. **Test your work** — Run tests before committing if a test command is configured.
-4. **Communicate via PROGRESS.md** — Log what you did and any blockers.
-5. **Claim tasks** — Use the task lock system to avoid conflicts with other agents.
-
-## Your Workflow
-
-1. Pull the latest changes from upstream
-2. Check PROGRESS.md for context on what others have done
-3. Look for unclaimed tasks or areas that need work
-4. Claim a task before starting work
-5. Make your changes in small, well-tested commits
-6. Push your changes to upstream
-7. Update PROGRESS.md with what you accomplished
-8. Release your task lock
-
-## Roles
-
-- **developer**: Implement new features and write production code
-- **tester**: Write and maintain test suites for code quality
-- **refactorer**: Improve code structure without changing behavior
-- **documenter**: Write documentation, comments, and READMEs
-- **optimizer**: Profile and optimize performance bottlenecks
-- **reviewer**: Review code changes and suggest improvements
-`
-
-		if err := os.WriteFile(agentPromptPath, []byte(agentPromptContent), 0644); err != nil {
+		if err := os.WriteFile(agentPromptPath, []byte(assets.DefaultAgentPrompt), 0644); err != nil {
 			return fmt.Errorf("failed to write AGENT_PROMPT.md: %w", err)
 		}
 		fmt.Println("  Created AGENT_PROMPT.md")

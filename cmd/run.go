@@ -70,7 +70,7 @@ var runCmd = &cobra.Command{
 				pullCmd.Dir = agentDir
 				pullCmd.Run() // best effort
 
-				// Read the agent prompt.
+				// Read the agent prompt and expand ${VAR} placeholders.
 				promptPath := filepath.Join(agentDir, constants.AgentPromptFile)
 				promptData, err := os.ReadFile(promptPath)
 				if err != nil {
@@ -78,8 +78,18 @@ var runCmd = &cobra.Command{
 					return
 				}
 
-				prompt := fmt.Sprintf("You are agent-0 with role '%s'. Model: %s.\n\n%s",
-					role, cfg.Agents.Model, string(promptData))
+				prompt := os.Expand(string(promptData), func(key string) string {
+					switch key {
+					case "AGENT_ID":
+						return "0"
+					case "AGENT_ROLE":
+						return role
+					case "AGENT_MODEL":
+						return cfg.Agents.Model
+					default:
+						return os.Getenv(key)
+					}
+				})
 
 				// Execute claude.
 				claudeCmd := exec.Command("claude", "--print", "--model", cfg.Agents.Model, prompt)

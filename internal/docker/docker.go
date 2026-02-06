@@ -21,6 +21,7 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
+	"github.com/brightfame/metamorph/assets"
 	"github.com/brightfame/metamorph/internal/constants"
 )
 
@@ -101,7 +102,7 @@ func newClientWithAPI(projectName string, api dockerAPI) *Client {
 	return &Client{cli: api, projectName: projectName}
 }
 
-// BuildImage copies the Dockerfile and entrypoint into .metamorph/docker/,
+// BuildImage writes the embedded Dockerfile and entrypoint into .metamorph/docker/,
 // creates a tar build context, and builds the image.
 func (c *Client) BuildImage(projectDir string) error {
 	buildDir := filepath.Join(projectDir, constants.DockerDir)
@@ -109,15 +110,14 @@ func (c *Client) BuildImage(projectDir string) error {
 		return fmt.Errorf("docker: failed to create build dir: %w", err)
 	}
 
-	assetsDir := filepath.Join(projectDir, "assets")
-	for _, name := range []string{"Dockerfile", "entrypoint.sh"} {
-		src := filepath.Join(assetsDir, name)
+	// Write embedded assets to the build directory.
+	embeddedFiles := map[string]string{
+		"Dockerfile":   assets.DefaultDockerfile,
+		"entrypoint.sh": assets.DefaultEntrypoint,
+	}
+	for name, content := range embeddedFiles {
 		dst := filepath.Join(buildDir, name)
-		data, err := os.ReadFile(src)
-		if err != nil {
-			return fmt.Errorf("docker: failed to read %s: %w", name, err)
-		}
-		if err := os.WriteFile(dst, data, 0755); err != nil {
+		if err := os.WriteFile(dst, []byte(content), 0755); err != nil {
 			return fmt.Errorf("docker: failed to write %s: %w", name, err)
 		}
 	}
