@@ -29,9 +29,10 @@ var runCmd = &cobra.Command{
 			return err
 		}
 
+		oauthToken := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
 		apiKey := os.Getenv("ANTHROPIC_API_KEY")
-		if apiKey == "" {
-			return fmt.Errorf("ANTHROPIC_API_KEY is not set")
+		if oauthToken == "" && apiKey == "" {
+			return fmt.Errorf("no credentials found: set CLAUDE_CODE_OAUTH_TOKEN (Claude Pro/Max) or ANTHROPIC_API_KEY")
 		}
 
 		if _, err := exec.LookPath("claude"); err != nil {
@@ -96,7 +97,13 @@ var runCmd = &cobra.Command{
 				claudeCmd.Dir = agentDir
 				claudeCmd.Stdout = os.Stdout
 				claudeCmd.Stderr = os.Stderr
-				claudeCmd.Env = append(os.Environ(), "ANTHROPIC_API_KEY="+apiKey)
+					claudeEnv := os.Environ()
+				if oauthToken != "" {
+					claudeEnv = append(claudeEnv, "CLAUDE_CODE_OAUTH_TOKEN="+oauthToken)
+				} else if apiKey != "" {
+					claudeEnv = append(claudeEnv, "ANTHROPIC_API_KEY="+apiKey)
+				}
+				claudeCmd.Env = claudeEnv
 
 				if err := claudeCmd.Run(); err != nil {
 					slog.Error("claude exited with error", "error", err)

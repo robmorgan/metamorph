@@ -65,6 +65,20 @@ Each agent runs in a loop:
 4. Run Claude Code with the agent prompt
 5. Commit, push, remove the lock, repeat
 
+## Prerequisites
+
+- **Docker** must be running. The CLI builds a container image on first start.
+- **Claude Pro or Max subscription** (recommended) or an **Anthropic API key** with sufficient credits.
+
+MetaMorph runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) inside each Docker container. You authenticate using one of two methods:
+
+| Method | Env Variable | Best For |
+|--------|-------------|----------|
+| **Claude Pro/Max** (recommended) | `CLAUDE_CODE_OAUTH_TOKEN` | Flat-rate subscription, no per-token billing |
+| **Anthropic API** | `ANTHROPIC_API_KEY` | Pay-per-token usage via the Anthropic API |
+
+To get a `CLAUDE_CODE_OAUTH_TOKEN`, run `claude` locally and authenticate with your Claude Pro/Max account, then copy the token from `~/.claude/config.json`. If both variables are set, the OAuth token takes priority.
+
 ## Quick Start
 
 ```bash
@@ -79,14 +93,13 @@ metamorph init
 vim metamorph.toml
 vim AGENT_PROMPT.md
 
-# 4. Set your API key
-export ANTHROPIC_API_KEY=sk-ant-...
+# 4. Set credentials (pick one)
+export CLAUDE_CODE_OAUTH_TOKEN=...   # Claude Pro/Max subscription (recommended)
+export ANTHROPIC_API_KEY=sk-ant-...  # Or: Anthropic API key
 
 # 5. Start agents
 metamorph start
 ```
-
-Requires Docker to be running. The CLI builds a container image on first start.
 
 ## Configuration Reference
 
@@ -310,7 +323,9 @@ metamorph notify --test
 
 ## Cost Estimation
 
-Each agent runs Claude Code in a continuous loop. Costs depend on the model, context size, and how fast agents work.
+If you use a **Claude Pro ($20/mo) or Max ($100–200/mo) subscription** with `CLAUDE_CODE_OAUTH_TOKEN`, usage is included in your subscription at a flat rate (subject to rate limits). This is the most cost-effective approach for sustained multi-agent workloads.
+
+If you use an **Anthropic API key**, each agent runs Claude Code in a continuous loop. Costs depend on the model, context size, and how fast agents work.
 
 **Rough formula:**
 
@@ -391,7 +406,7 @@ arrays, and objects.
 
 **4. Start:**
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export CLAUDE_CODE_OAUTH_TOKEN=...  # or ANTHROPIC_API_KEY=sk-ant-...
 metamorph start
 ```
 

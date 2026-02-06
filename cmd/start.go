@@ -35,9 +35,11 @@ func init() {
 	startCmd.Flags().Bool("daemon-mode", false, "Run as daemon (internal)")
 	startCmd.Flags().String("project-dir", "", "Project directory (internal)")
 	startCmd.Flags().String("api-key", "", "API key (internal)")
+	startCmd.Flags().String("oauth-token", "", "OAuth token (internal)")
 	_ = startCmd.Flags().MarkHidden("daemon-mode")
 	_ = startCmd.Flags().MarkHidden("project-dir")
 	_ = startCmd.Flags().MarkHidden("api-key")
+	_ = startCmd.Flags().MarkHidden("oauth-token")
 
 	rootCmd.AddCommand(startCmd)
 }
@@ -45,12 +47,13 @@ func init() {
 func runDaemonMode(cmd *cobra.Command) error {
 	projectDir, _ := cmd.Flags().GetString("project-dir")
 	apiKey, _ := cmd.Flags().GetString("api-key")
+	oauthToken, _ := cmd.Flags().GetString("oauth-token")
 
 	if projectDir == "" {
 		return fmt.Errorf("--project-dir is required in daemon mode")
 	}
-	if apiKey == "" {
-		return fmt.Errorf("--api-key is required in daemon mode")
+	if apiKey == "" && oauthToken == "" {
+		return fmt.Errorf("--api-key or --oauth-token is required in daemon mode")
 	}
 
 	cfg, err := loadConfig(projectDir)
@@ -63,7 +66,7 @@ func runDaemonMode(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to create Docker client: %w", err)
 	}
 
-	return daemon.Run(projectDir, cfg, apiKey, dockerClient)
+	return daemon.Run(projectDir, cfg, apiKey, oauthToken, dockerClient)
 }
 
 func runForegroundStart(cmd *cobra.Command) error {
@@ -98,9 +101,10 @@ func runForegroundStart(cmd *cobra.Command) error {
 		slog.Info("overriding model from flag", "model", model)
 	}
 
+	oauthToken := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("ANTHROPIC_API_KEY is not set")
+	if oauthToken == "" && apiKey == "" {
+		return fmt.Errorf("no credentials found: set CLAUDE_CODE_OAUTH_TOKEN (Claude Pro/Max) or ANTHROPIC_API_KEY")
 	}
 
 	if daemon.IsRunning(projectDir) {
@@ -123,7 +127,7 @@ func runForegroundStart(cmd *cobra.Command) error {
 
 	fmt.Printf("Starting metamorph daemon for %q...\n", cfg.Project.Name)
 
-	if err := daemon.Start(projectDir, cfg, apiKey); err != nil {
+	if err := daemon.Start(projectDir, cfg, apiKey, oauthToken); err != nil {
 		return err
 	}
 

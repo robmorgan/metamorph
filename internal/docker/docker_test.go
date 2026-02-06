@@ -541,6 +541,77 @@ func TestStartAgent_PassesCorrectConfig(t *testing.T) {
 	}
 }
 
+func TestStartAgent_PassesOAuthToken(t *testing.T) {
+	projectDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+
+	mock := &mockDocker{
+		createResp: container.CreateResponse{ID: "cid-oauth"},
+	}
+	c := newClientWithAPI("test-proj", mock)
+
+	opts := AgentOpts{
+		ProjectDir: projectDir,
+		AgentID:    1,
+		Role:       "developer",
+		Model:      "claude-opus",
+		OAuthToken: "oauth-token-123",
+	}
+
+	_, err := c.StartAgent(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+
+	envMap := map[string]string{}
+	for _, e := range mock.created[0].Config.Env {
+		parts := strings.SplitN(e, "=", 2)
+		envMap[parts[0]] = parts[1]
+	}
+	if envMap["CLAUDE_CODE_OAUTH_TOKEN"] != "oauth-token-123" {
+		t.Errorf("CLAUDE_CODE_OAUTH_TOKEN = %q, want %q", envMap["CLAUDE_CODE_OAUTH_TOKEN"], "oauth-token-123")
+	}
+	if _, ok := envMap["ANTHROPIC_API_KEY"]; ok {
+		t.Errorf("ANTHROPIC_API_KEY should not be set when only OAuthToken is provided")
+	}
+}
+
+func TestStartAgent_OAuthTakesPrecedence(t *testing.T) {
+	projectDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+
+	mock := &mockDocker{
+		createResp: container.CreateResponse{ID: "cid-both"},
+	}
+	c := newClientWithAPI("test-proj", mock)
+
+	opts := AgentOpts{
+		ProjectDir: projectDir,
+		AgentID:    1,
+		Role:       "developer",
+		Model:      "claude-opus",
+		APIKey:     "sk-test-123",
+		OAuthToken: "oauth-token-123",
+	}
+
+	_, err := c.StartAgent(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+
+	envMap := map[string]string{}
+	for _, e := range mock.created[0].Config.Env {
+		parts := strings.SplitN(e, "=", 2)
+		envMap[parts[0]] = parts[1]
+	}
+	if envMap["CLAUDE_CODE_OAUTH_TOKEN"] != "oauth-token-123" {
+		t.Errorf("CLAUDE_CODE_OAUTH_TOKEN = %q", envMap["CLAUDE_CODE_OAUTH_TOKEN"])
+	}
+	if _, ok := envMap["ANTHROPIC_API_KEY"]; ok {
+		t.Errorf("ANTHROPIC_API_KEY should not be set when OAuthToken is provided")
+	}
+}
+
 func TestDockerClientInterface(t *testing.T) {
 	// Verify the interface is usable with a mock.
 	var _ DockerClient = (*Client)(nil)

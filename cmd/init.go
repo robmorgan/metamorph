@@ -124,7 +124,9 @@ webhook_url = ""
 		fmt.Println("Next steps:")
 		fmt.Println("  1. Review and customize metamorph.toml")
 		fmt.Println("  2. Edit AGENT_PROMPT.md with project-specific instructions")
-		fmt.Println("  3. Set your API key: export ANTHROPIC_API_KEY=sk-...")
+		fmt.Println("  3. Set credentials (pick one):")
+		fmt.Println("       export CLAUDE_CODE_OAUTH_TOKEN=...   # Claude Pro/Max subscription")
+		fmt.Println("       export ANTHROPIC_API_KEY=sk-...       # Anthropic API key")
 		fmt.Println("  4. Start agents: metamorph start")
 
 		return nil

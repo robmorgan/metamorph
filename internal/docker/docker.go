@@ -43,7 +43,8 @@ type AgentOpts struct {
 	AgentID    int
 	Role       string
 	Model      string
-	APIKey     string
+	APIKey     string // Anthropic API key (if set)
+	OAuthToken string // Claude Code OAuth token (if set, preferred over APIKey)
 }
 
 // AgentInfo describes a running agent container.
@@ -192,14 +193,20 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 		return "", fmt.Errorf("docker: failed to create log dir: %w", err)
 	}
 
+	env := []string{
+		"AGENT_ID=" + agentIDStr,
+		"AGENT_ROLE=" + opts.Role,
+		"AGENT_MODEL=" + opts.Model,
+	}
+	if opts.OAuthToken != "" {
+		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+opts.OAuthToken)
+	} else if opts.APIKey != "" {
+		env = append(env, "ANTHROPIC_API_KEY="+opts.APIKey)
+	}
+
 	config := &container.Config{
 		Image: defaultImageTag,
-		Env: []string{
-			"AGENT_ID=" + agentIDStr,
-			"AGENT_ROLE=" + opts.Role,
-			"AGENT_MODEL=" + opts.Model,
-			"ANTHROPIC_API_KEY=" + opts.APIKey,
-		},
+		Env:   env,
 		Labels: map[string]string{
 			labelProject: c.projectName,
 			labelAgentID: agentIDStr,

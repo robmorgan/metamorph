@@ -66,7 +66,8 @@ type Stats struct {
 type Daemon struct {
 	projectDir string
 	cfg        *config.Config
-	apiKey     string
+	apiKey     string // Anthropic API key (if set)
+	oauthToken string // Claude Code OAuth token (if set)
 	docker     docker.DockerClient
 	state      *State
 	startedAt  time.Time
@@ -80,7 +81,7 @@ type Daemon struct {
 
 // Start launches the daemon as a background subprocess. It re-execs the
 // current binary with --daemon-mode and waits for state.json to appear.
-func Start(projectDir string, cfg *config.Config, apiKey string) error {
+func Start(projectDir string, cfg *config.Config, apiKey, oauthToken string) error {
 	pidPath := filepath.Join(projectDir, constants.DaemonPIDFile)
 
 	// Check for orphan containers from a previous crashed daemon.
@@ -100,10 +101,14 @@ func Start(projectDir string, cfg *config.Config, apiKey string) error {
 		return fmt.Errorf("daemon: failed to find executable: %w", err)
 	}
 
-	cmd := exec.Command(exe, "start", "--daemon-mode",
-		"--project-dir", projectDir,
-		"--api-key", apiKey,
-	)
+	args := []string{"start", "--daemon-mode", "--project-dir", projectDir}
+	if apiKey != "" {
+		args = append(args, "--api-key", apiKey)
+	}
+	if oauthToken != "" {
+		args = append(args, "--oauth-token", oauthToken)
+	}
+	cmd := exec.Command(exe, args...)
 	cmd.Dir = projectDir
 
 	// Redirect daemon output to a log file for diagnostics.
@@ -288,11 +293,12 @@ func IsRunning(projectDir string) bool {
 
 // Run executes the daemon's main loop (called when --daemon-mode is set).
 // This is exported so the CLI can call it from the start command.
-func Run(projectDir string, cfg *config.Config, apiKey string, dockerClient docker.DockerClient) error {
+func Run(projectDir string, cfg *config.Config, apiKey, oauthToken string, dockerClient docker.DockerClient) error {
 	d := &Daemon{
 		projectDir:        projectDir,
 		cfg:               cfg,
 		apiKey:            apiKey,
+		oauthToken:        oauthToken,
 		docker:            dockerClient,
 		startedAt:         time.Now().UTC(),
 		lastErrorNotified: make(map[int]time.Time),
@@ -360,6 +366,7 @@ func (d *Daemon) startAgents(ctx context.Context) ([]AgentState, error) {
 			Role:       role,
 			Model:      d.cfg.Agents.Model,
 			APIKey:     d.apiKey,
+			OAuthToken: d.oauthToken,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to start agent-%d: %w", i, err)
@@ -463,6 +470,7 @@ func (d *Daemon) restartCrashedAgents(ctx context.Context, infos []docker.AgentI
 			Role:       a.Role,
 			Model:      d.cfg.Agents.Model,
 			APIKey:     d.apiKey,
+			OAuthToken: d.oauthToken,
 		})
 		if err == nil {
 			a.ContainerID = containerID
