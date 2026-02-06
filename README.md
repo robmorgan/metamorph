@@ -37,9 +37,9 @@ The alternative is parallelism: split the work across multiple agents that each 
                           │  - check logs for errors      │
                           └──────────┬────────────────────┘
                                      │
-              ┌──────────────────────┼───────────────────────┐
-              │                      │                       │
-    ┌─────────▼────────┐   ┌───────────▼─────┐   ┌────────────▼──────┐
+              ┌──────────────────────┼────────────────────────┐
+              │                      │                        │
+    ┌─────────▼────────┐   ┌─────────▼───────┐   ┌────────────▼──────┐
     │  Docker Agent 1  │   │  Docker Agent 2 │   │  Docker Agent N   │
     │  role: developer │   │  role: tester   │   │  role: refactorer │
     └────────┬─────────┘   └────────┬────────┘   └────────┬──────────┘
