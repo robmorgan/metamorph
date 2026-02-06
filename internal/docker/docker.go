@@ -2,8 +2,10 @@ package docker
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -30,7 +32,7 @@ const (
 	labelProject     = "metamorph.project"
 	labelAgentID     = "metamorph.agent-id"
 	stopTimeout      = 30 // seconds
-	buildTimeout     = 60 * time.Second
+	buildTimeout     = 5 * time.Minute
 	startStopTimeout = 30 * time.Second
 	listTimeout      = 10 * time.Second
 )
@@ -143,9 +145,22 @@ func (c *Client) BuildImage(projectDir string) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// Drain the build output (required for build to complete).
-	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+	// Read the build output stream and check for errors.
+	scanner := bufio.NewScanner(resp.Body)
+	var buildErr string
+	for scanner.Scan() {
+		var msg struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err == nil && msg.Error != "" {
+			buildErr = msg.Error
+		}
+	}
+	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("docker: failed to read build output: %w", err)
+	}
+	if buildErr != "" {
+		return fmt.Errorf("docker: image build failed: %s", buildErr)
 	}
 
 	return nil
@@ -158,6 +173,10 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 
 	containerName := fmt.Sprintf("metamorph-%s-agent-%d", c.projectName, opts.AgentID)
 	agentIDStr := strconv.Itoa(opts.AgentID)
+
+	// Remove any stale container with the same name so we can recreate it.
+	_ = c.cli.ContainerStop(ctx, containerName, container.StopOptions{})
+	_ = c.cli.ContainerRemove(ctx, containerName, container.RemoveOptions{})
 
 	upstreamAbs, err := filepath.Abs(filepath.Join(opts.ProjectDir, constants.UpstreamDir))
 	if err != nil {
@@ -242,13 +261,19 @@ func (c *Client) StopAgent(ctx context.Context, agentID int) error {
 
 // StopAllAgents stops and removes all containers for this project.
 func (c *Client) StopAllAgents(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, startStopTimeout)
-	defer cancel()
+	// Use a generous listing timeout first.
+	listCtx, listCancel := context.WithTimeout(ctx, listTimeout)
+	defer listCancel()
 
-	containers, err := c.listProjectContainers(ctx)
+	containers, err := c.listProjectContainers(listCtx)
 	if err != nil {
 		return err
 	}
+
+	// Allow enough time for all containers to stop sequentially.
+	stopDeadline := time.Duration(len(containers)+1) * startStopTimeout
+	ctx, cancel := context.WithTimeout(ctx, stopDeadline)
+	defer cancel()
 
 	var errs []string
 	timeout := stopTimeout

@@ -21,9 +21,14 @@ RUN apt-get update && apt-get install -y \
 
 RUN npm install -g @anthropic-ai/claude-code
 
+RUN userdel -r ubuntu 2>/dev/null; useradd -m -s /bin/bash -u 1000 agent
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+RUN mkdir -p /workspace && chown agent:agent /workspace
 WORKDIR /workspace
+
+USER agent
 
 ENTRYPOINT ["/entrypoint.sh"]
