@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"text/tabwriter"
 
+	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/daemon"
 	"github.com/robmorgan/metamorph/internal/docker"
 	"github.com/spf13/cobra"
@@ -73,6 +75,12 @@ func runForegroundStart(cmd *cobra.Command) error {
 	cfg, err := loadConfig(projectDir)
 	if err != nil {
 		return err
+	}
+
+	// Check that the project has been initialized (upstream repo exists).
+	upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
+	if _, err := os.Stat(upstreamPath); os.IsNotExist(err) {
+		return fmt.Errorf("project not initialized: %s not found\n\nRun 'metamorph init' first to set up the project", constants.UpstreamDir)
 	}
 
 	// Apply flag overrides to a local copy for display/dry-run purposes.

@@ -283,7 +283,7 @@ func TestPromptShow(t *testing.T) {
 }
 
 func TestStartDryRun(t *testing.T) {
-	dir := testProject(t)
+	dir := testProjectWithUpstream(t)
 
 	oldWd, _ := os.Getwd()
 	if err := os.Chdir(dir); err != nil {
