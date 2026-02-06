@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/brightfame/metamorph/internal/config"
+	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/spf13/cobra"
 )
 

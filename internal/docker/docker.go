@@ -21,8 +21,8 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
-	"github.com/brightfame/metamorph/assets"
-	"github.com/brightfame/metamorph/internal/constants"
+	"github.com/robmorgan/metamorph/assets"
+	"github.com/robmorgan/metamorph/internal/constants"
 )
 
 const (

@@ -37,16 +37,16 @@ The alternative is parallelism: split the work across multiple agents that each 
                           │  - check logs for errors      │
                           └──────────┬────────────────────┘
                                      │
-              ┌──────────────────────┼──────────────────────┐
-              │                      │                      │
-    ┌─────────▼───────┐   ┌───────────▼─────┐   ┌────────────▼──────┐
-    │  Docker Agent 1 │   │  Docker Agent 2 │   │  Docker Agent N   │
-    │  role: developer│   │  role: tester   │   │  role: refactorer │
-    └────────┬────────┘   └────────┬────────┘   └────────┬──────────┘
-             │                     │                     │
-             └─────────────────────┼─────────────────────┘
-                                   │
-                        ┌──────────▼────────────┐
+              ┌──────────────────────┼───────────────────────┐
+              │                      │                       │
+    ┌─────────▼────────┐   ┌───────────▼─────┐   ┌────────────▼──────┐
+    │  Docker Agent 1  │   │  Docker Agent 2 │   │  Docker Agent N   │
+    │  role: developer │   │  role: tester   │   │  role: refactorer │
+    └────────┬─────────┘   └────────┬────────┘   └────────┬──────────┘
+             │                      │                     │
+             └──────────────────────┼─────────────────────┘
+                                    │
+                        ┌───────────▼───────────┐
                         │  Bare Git Repo        │
                         │  (.metamorph/         │
                         │   upstream.git)       │
@@ -69,7 +69,7 @@ Each agent runs in a loop:
 
 ```bash
 # 1. Install
-go install github.com/brightfame/metamorph@latest
+go install github.com/robmorgan/metamorph@latest
 
 # 2. Initialize a project
 cd your-project

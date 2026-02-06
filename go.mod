@@ -1,4 +1,4 @@
-module github.com/brightfame/metamorph
+module github.com/robmorgan/metamorph
 
 go 1.24.0
 

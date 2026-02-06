@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brightfame/metamorph/internal/constants"
+	"github.com/robmorgan/metamorph/internal/constants"
 )
 
 // testProject creates a temp dir with a valid metamorph.toml, AGENT_PROMPT.md,

@@ -1,6 +1,6 @@
 package main
 
-import "github.com/brightfame/metamorph/cmd"
+import "github.com/robmorgan/metamorph/cmd"
 
 func main() {
 	cmd.Execute()

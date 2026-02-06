@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/BurntSushi/toml"
-	"github.com/brightfame/metamorph/internal/constants"
+	"github.com/robmorgan/metamorph/internal/constants"
 )
 
 type Config struct {

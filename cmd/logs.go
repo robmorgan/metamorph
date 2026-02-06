@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/brightfame/metamorph/internal/constants"
+	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/spf13/cobra"
 )
 

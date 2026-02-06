@@ -6,8 +6,8 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/brightfame/metamorph/internal/daemon"
-	"github.com/brightfame/metamorph/internal/docker"
+	"github.com/robmorgan/metamorph/internal/daemon"
+	"github.com/robmorgan/metamorph/internal/docker"
 	"github.com/spf13/cobra"
 )
 

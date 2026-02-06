@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brightfame/metamorph/internal/constants"
+	"github.com/robmorgan/metamorph/internal/constants"
 )
 
 // setupUpstream creates a temp dir and initializes the upstream bare repo.

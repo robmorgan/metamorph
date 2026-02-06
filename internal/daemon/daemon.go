@@ -15,11 +15,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/brightfame/metamorph/internal/config"
-	"github.com/brightfame/metamorph/internal/constants"
-	"github.com/brightfame/metamorph/internal/docker"
-	"github.com/brightfame/metamorph/internal/notify"
-	"github.com/brightfame/metamorph/internal/tasks"
+	"github.com/robmorgan/metamorph/internal/config"
+	"github.com/robmorgan/metamorph/internal/constants"
+	"github.com/robmorgan/metamorph/internal/docker"
+	"github.com/robmorgan/metamorph/internal/notify"
+	"github.com/robmorgan/metamorph/internal/tasks"
 )
 
 const (

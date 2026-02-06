@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/brightfame/metamorph/internal/constants"
-	"github.com/brightfame/metamorph/internal/gitops"
+	"github.com/robmorgan/metamorph/internal/constants"
+	"github.com/robmorgan/metamorph/internal/gitops"
 	"github.com/spf13/cobra"
 )
 

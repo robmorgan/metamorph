@@ -10,9 +10,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/brightfame/metamorph/internal/constants"
-	"github.com/brightfame/metamorph/internal/gitops"
-	"github.com/brightfame/metamorph/internal/tasks"
+	"github.com/robmorgan/metamorph/internal/constants"
+	"github.com/robmorgan/metamorph/internal/gitops"
+	"github.com/robmorgan/metamorph/internal/tasks"
 	"github.com/spf13/cobra"
 )
 

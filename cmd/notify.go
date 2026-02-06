@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/brightfame/metamorph/internal/notify"
+	"github.com/robmorgan/metamorph/internal/notify"
 	"github.com/spf13/cobra"
 )
 
