@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -277,22 +278,34 @@ func (c *Client) StopAllAgents(ctx context.Context) error {
 		return err
 	}
 
-	// Allow enough time for all containers to stop sequentially.
-	stopDeadline := time.Duration(len(containers)+1) * startStopTimeout
-	ctx, cancel := context.WithTimeout(ctx, stopDeadline)
+	// Stop all containers in parallel so we fit within a single stop timeout.
+	ctx, cancel := context.WithTimeout(ctx, startStopTimeout)
 	defer cancel()
 
-	var errs []string
+	var (
+		mu   sync.Mutex
+		errs []string
+		wg   sync.WaitGroup
+	)
 	timeout := stopTimeout
 	for _, ctr := range containers {
-		if err := c.cli.ContainerStop(ctx, ctr.ID, container.StopOptions{Timeout: &timeout}); err != nil {
-			errs = append(errs, fmt.Sprintf("stop %s: %v", ctr.ID[:12], err))
-			continue
-		}
-		if err := c.cli.ContainerRemove(ctx, ctr.ID, container.RemoveOptions{}); err != nil {
-			errs = append(errs, fmt.Sprintf("remove %s: %v", ctr.ID[:12], err))
-		}
+		wg.Add(1)
+		go func(ctr types.Container) {
+			defer wg.Done()
+			if err := c.cli.ContainerStop(ctx, ctr.ID, container.StopOptions{Timeout: &timeout}); err != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Sprintf("stop %s: %v", ctr.ID[:12], err))
+				mu.Unlock()
+				return
+			}
+			if err := c.cli.ContainerRemove(ctx, ctr.ID, container.RemoveOptions{}); err != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Sprintf("remove %s: %v", ctr.ID[:12], err))
+				mu.Unlock()
+			}
+		}(ctr)
 	}
+	wg.Wait()
 
 	if len(errs) > 0 {
 		return fmt.Errorf("docker: errors stopping agents: %s", strings.Join(errs, "; "))
