@@ -46,7 +46,7 @@ description = ""
 
 [agents]
 count = 4
-model = "claude-sonnet-4-20250514"
+model = "claude-opus-4-6"
 roles = ["developer", "developer", "tester", "refactorer"]
 
 [docker]

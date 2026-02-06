@@ -99,7 +99,7 @@ description = ""
 
 [agents]
 count = 4                                                  # number of parallel agents
-model = "claude-sonnet-4-20250514"                         # any Claude model ID
+model = "claude-opus-4-6"                                  # any Claude model ID
 roles = ["developer", "developer", "tester", "refactorer"] # assigned round-robin
 
 [docker]
@@ -121,7 +121,7 @@ webhook_url = ""                                           # POST JSON events he
 | `metamorph init [dir]` | Initialize a new project (creates `metamorph.toml`, `AGENT_PROMPT.md`, `PROGRESS.md`) |
 | `metamorph start` | Build the Docker image, start the daemon and all agents |
 | `metamorph start -n 8` | Override agent count for this run |
-| `metamorph start --model claude-sonnet-4-20250514` | Override model for this run |
+| `metamorph start --model claude-sonnet-4-5-20250929` | Override model (e.g. use Sonnet to reduce costs) |
 | `metamorph start --dry-run` | Show what would happen without starting |
 | `metamorph stop` | Stop the daemon and all agent containers, sync results |
 | `metamorph status` | Show agent table with roles, tasks, and activity |
@@ -161,7 +161,7 @@ Roles are assigned round-robin from the `roles` array. With `count = 4` and `rol
 |----------|-------|---------|
 | `${AGENT_ID}` | Numeric agent identifier | `1`, `2`, `3` |
 | `${AGENT_ROLE}` | Role from config | `developer`, `tester` |
-| `${AGENT_MODEL}` | Model ID from config | `claude-sonnet-4-20250514` |
+| `${AGENT_MODEL}` | Model ID from config | `claude-opus-4-6` |
 
 The default prompt includes:
 - Identity section (who the agent is)
@@ -333,7 +333,7 @@ These are rough estimates. Actual costs vary based on task complexity, how often
 - Start with fewer agents and scale up once you've validated the approach
 - Use `--dry-run` to verify configuration before starting
 - Monitor with `metamorph status` and stop early if agents are thrashing
-- Use Sonnet for most work; reserve Opus for complex reasoning tasks
+- Default is Opus; switch to Sonnet for cost-sensitive tasks
 
 ## Worked Example: JSON Parser in Rust
 
@@ -354,7 +354,7 @@ description = "A spec-compliant JSON parser in Rust"
 
 [agents]
 count = 4
-model = "claude-sonnet-4-20250514"
+model = "claude-opus-4-6"
 roles = ["developer", "developer", "tester", "refactorer"]
 
 [testing]
@@ -411,8 +411,8 @@ They coordinate through git. The lock file + push mechanism means only one agent
 **What happens when an agent crashes?**
 The daemon detects the stopped container within 30 seconds, restarts it, and sends an `agent_crashed` webhook. The agent starts a new session, pulls the latest code, and picks up where it left off (or claims a new task).
 
-**Can I use Opus instead of Sonnet?**
-Yes. Set `model = "claude-opus-4-20250514"` in `metamorph.toml`. Opus is better at complex reasoning but significantly more expensive. A common pattern is to run most agents on Sonnet with one Opus agent for the hardest tasks.
+**Can I use Sonnet instead of Opus?**
+Yes. Set `model = "claude-sonnet-4-5-20250929"` in `metamorph.toml` or pass `--model claude-sonnet-4-5-20250929` at start. Sonnet is cheaper and good for routine tasks. A common pattern is to use Sonnet for most agents and reserve Opus for the hardest tasks.
 
 **How do I add project dependencies (Python, Rust, etc.)?**
 Add system packages to `extra_packages` in `metamorph.toml`. For language-specific toolchains, you may need to customize the Dockerfile. The embedded Dockerfile is written to `.metamorph/docker/Dockerfile` on first build — you can edit it there.
