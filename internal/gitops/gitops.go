@@ -25,8 +25,10 @@ func git(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// InitUpstream creates a bare git repo at <projectDir>/.metamorph/upstream.git,
-// seeds it with initial files, and pushes an initial commit.
+// InitUpstream creates a bare git repo at <projectDir>/.metamorph/upstream.git
+// by cloning the user's project repo. This gives shared history so that
+// fetch/merge can sync agent commits back to the project.
+// Scaffold files (PROGRESS.md, current_tasks/.gitkeep) are added if missing.
 func InitUpstream(projectDir string) error {
 	upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
 
@@ -34,36 +36,21 @@ func InitUpstream(projectDir string) error {
 		return fmt.Errorf("gitops: failed to create parent dir: %w", err)
 	}
 
-	if _, err := git(projectDir, "init", "--bare", upstreamPath); err != nil {
-		return fmt.Errorf("gitops: failed to init bare repo: %w", err)
+	// Clone from user's repo — shared history enables fetch/merge on sync.
+	if _, err := git(projectDir, "clone", "--bare", ".", upstreamPath); err != nil {
+		return fmt.Errorf("gitops: failed to clone bare repo: %w", err)
 	}
 
-	// Create a temporary clone to seed the bare repo.
+	// Clone the bare repo to a temp dir to add scaffold files.
 	tmpDir, err := os.MkdirTemp("", "metamorph-init-*")
 	if err != nil {
 		return fmt.Errorf("gitops: failed to create temp dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
+	seedDir := filepath.Join(tmpDir, "seed")
 	if _, err := git(tmpDir, "clone", upstreamPath, "seed"); err != nil {
 		return fmt.Errorf("gitops: failed to clone for seeding: %w", err)
-	}
-
-	seedDir := filepath.Join(tmpDir, "seed")
-
-	// Create seed files.
-	files := map[string]string{
-		constants.ProgressFile:                            "# Progress\n",
-		filepath.Join(constants.TaskLockDir, ".gitkeep"): "",
-	}
-	for relPath, content := range files {
-		fullPath := filepath.Join(seedDir, relPath)
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-			return fmt.Errorf("gitops: failed to create dir for %s: %w", relPath, err)
-		}
-		if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
-			return fmt.Errorf("gitops: failed to write %s: %w", relPath, err)
-		}
 	}
 
 	// Set identity for the seed commit so it works in environments without
@@ -75,22 +62,42 @@ func InitUpstream(projectDir string) error {
 		return fmt.Errorf("gitops: failed to set user.email in seed clone: %w", err)
 	}
 
-	if _, err := git(seedDir, "add", "."); err != nil {
-		return fmt.Errorf("gitops: failed to stage seed files: %w", err)
+	// Only create scaffold files that don't already exist.
+	files := map[string]string{
+		constants.ProgressFile:                            "# Progress\n",
+		filepath.Join(constants.TaskLockDir, ".gitkeep"): "",
+	}
+	added := false
+	for relPath, content := range files {
+		fullPath := filepath.Join(seedDir, relPath)
+		if _, err := os.Stat(fullPath); err == nil {
+			continue // already exists
+		}
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+			return fmt.Errorf("gitops: failed to create dir for %s: %w", relPath, err)
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+			return fmt.Errorf("gitops: failed to write %s: %w", relPath, err)
+		}
+		added = true
 	}
 
-	if _, err := git(seedDir, "commit", "-m", "metamorph: initial commit"); err != nil {
-		return fmt.Errorf("gitops: failed to commit seed files: %w", err)
-	}
+	if added {
+		if _, err := git(seedDir, "add", "."); err != nil {
+			return fmt.Errorf("gitops: failed to stage seed files: %w", err)
+		}
+		if _, err := git(seedDir, "commit", "-m", "metamorph: add scaffold files"); err != nil {
+			return fmt.Errorf("gitops: failed to commit seed files: %w", err)
+		}
 
-	// Detect branch name and push.
-	branch, err := git(seedDir, "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		return fmt.Errorf("gitops: failed to detect branch name: %w", err)
-	}
-
-	if _, err := git(seedDir, "push", "origin", branch); err != nil {
-		return fmt.Errorf("gitops: failed to push seed commit: %w", err)
+		// Detect branch name and push.
+		branch, err := git(seedDir, "rev-parse", "--abbrev-ref", "HEAD")
+		if err != nil {
+			return fmt.Errorf("gitops: failed to detect branch name: %w", err)
+		}
+		if _, err := git(seedDir, "push", "origin", branch); err != nil {
+			return fmt.Errorf("gitops: failed to push seed commit: %w", err)
+		}
 	}
 
 	return nil
@@ -163,6 +170,54 @@ func SyncToWorkingCopy(upstreamPath string, workingCopyPath string) (string, err
 	}
 
 	summary, err := git(workingCopyPath, "log", "--oneline", oldHead+".."+newHead)
+	if err != nil {
+		return "", fmt.Errorf("gitops: failed to read new commits: %w", err)
+	}
+	return summary, nil
+}
+
+// SyncToProjectDir fetches agent commits from upstream and merges them
+// into the user's project directory.
+func SyncToProjectDir(upstreamPath, projectDir string) (string, error) {
+	// Verify project is a git repo.
+	if _, err := os.Stat(filepath.Join(projectDir, ".git")); os.IsNotExist(err) {
+		return "", fmt.Errorf("gitops: project is not a git repo: %s", projectDir)
+	}
+
+	// Record HEAD before merge.
+	oldHead, err := git(projectDir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("gitops: failed to get HEAD before sync: %w", err)
+	}
+
+	// Detect the default branch in upstream.
+	branch, err := git(upstreamPath, "symbolic-ref", "--short", "HEAD")
+	if err != nil {
+		branch = "main" // fallback
+	}
+
+	// Fetch from upstream.
+	if _, err := git(projectDir, "fetch", upstreamPath, branch); err != nil {
+		return "", fmt.Errorf("gitops: fetch failed: %w", err)
+	}
+
+	// Merge FETCH_HEAD.
+	if _, err := git(projectDir, "merge", "FETCH_HEAD", "--no-edit"); err != nil {
+		return "", fmt.Errorf("gitops: merge failed (resolve conflicts manually): %w", err)
+	}
+
+	// Get new HEAD.
+	newHead, err := git(projectDir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("gitops: failed to get HEAD after sync: %w", err)
+	}
+
+	if oldHead == newHead {
+		return "", nil
+	}
+
+	// Return summary of new commits.
+	summary, err := git(projectDir, "log", "--oneline", oldHead+".."+newHead)
 	if err != nil {
 		return "", fmt.Errorf("gitops: failed to read new commits: %w", err)
 	}

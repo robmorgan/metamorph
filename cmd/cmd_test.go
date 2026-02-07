@@ -58,35 +58,53 @@ webhook_url = ""
 	return dir
 }
 
-// testProjectWithUpstream creates a testProject and also sets up a valid
-// bare upstream git repo and working copy support.
+// testProjectWithUpstream creates a testProject, initializes it as a git repo
+// with an initial commit, then clones it as a bare upstream repo — matching
+// the real InitUpstream behavior (shared history).
 func testProjectWithUpstream(t *testing.T) string {
 	t.Helper()
 	dir := testProject(t)
 
+	// Initialize the project dir as a git repo with an initial commit.
+	gitExec(t, dir, "init")
+	gitExec(t, dir, "config", "user.name", "test")
+	gitExec(t, dir, "config", "user.email", "test@test")
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "initial commit")
+
+	// Clone the project as a bare upstream repo (shared history).
 	upstreamPath := filepath.Join(dir, constants.UpstreamDir)
+	if err := os.MkdirAll(filepath.Dir(upstreamPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "clone", "--bare", ".", upstreamPath)
 
-	// Init bare repo.
-	gitExec(t, dir, "init", "--bare", upstreamPath)
-
-	// Clone, seed, push.
+	// Add scaffold files if needed (current_tasks/.gitkeep).
 	tmpDir := t.TempDir()
 	cloneDir := filepath.Join(tmpDir, "seed")
 	gitExec(t, tmpDir, "clone", upstreamPath, cloneDir)
 	gitExec(t, cloneDir, "config", "user.name", "test")
 	gitExec(t, cloneDir, "config", "user.email", "test@test")
 
-	if err := os.MkdirAll(filepath.Join(cloneDir, constants.TaskLockDir), 0755); err != nil {
-		t.Fatal(err)
+	needsCommit := false
+	taskLockDir := filepath.Join(cloneDir, constants.TaskLockDir)
+	gitkeep := filepath.Join(taskLockDir, ".gitkeep")
+	if _, err := os.Stat(gitkeep); os.IsNotExist(err) {
+		if err := os.MkdirAll(taskLockDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(gitkeep, []byte(""), 0644); err != nil {
+			t.Fatal(err)
+		}
+		needsCommit = true
 	}
-	if err := os.WriteFile(filepath.Join(cloneDir, constants.TaskLockDir, ".gitkeep"), []byte(""), 0644); err != nil {
-		t.Fatal(err)
-	}
-	gitExec(t, cloneDir, "add", ".")
-	gitExec(t, cloneDir, "commit", "-m", "seed")
 
-	branch := gitOutput(t, cloneDir, "rev-parse", "--abbrev-ref", "HEAD")
-	gitExec(t, cloneDir, "push", "origin", branch)
+	if needsCommit {
+		gitExec(t, cloneDir, "add", ".")
+		gitExec(t, cloneDir, "commit", "-m", "seed scaffold files")
+		branch := gitOutput(t, cloneDir, "rev-parse", "--abbrev-ref", "HEAD")
+		gitExec(t, cloneDir, "push", "origin", branch)
+	}
 
 	return dir
 }

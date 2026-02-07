@@ -10,10 +10,35 @@ import (
 	"github.com/robmorgan/metamorph/internal/constants"
 )
 
-// setupUpstream creates a temp dir and initializes the upstream bare repo.
+// initGitRepo initializes a git repo at dir with an initial commit containing
+// a dummy file. This is needed because InitUpstream now clones the user's repo.
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := git(dir, "init"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if _, err := git(dir, "config", "user.name", "test"); err != nil {
+		t.Fatalf("git config user.name: %v", err)
+	}
+	if _, err := git(dir, "config", "user.email", "test@test"); err != nil {
+		t.Fatalf("git config user.email: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test\n"), 0644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	if _, err := git(dir, "add", "."); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := git(dir, "commit", "-m", "initial commit"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+}
+
+// setupUpstream creates a temp dir with a git repo and initializes the upstream bare repo.
 func setupUpstream(t *testing.T) (projectDir, upstreamPath string) {
 	t.Helper()
 	projectDir = t.TempDir()
+	initGitRepo(t, projectDir)
 	if err := InitUpstream(projectDir); err != nil {
 		t.Fatalf("InitUpstream: %v", err)
 	}
@@ -24,6 +49,7 @@ func setupUpstream(t *testing.T) (projectDir, upstreamPath string) {
 func TestInitUpstream(t *testing.T) {
 	t.Run("creates bare repo with seed files", func(t *testing.T) {
 		projectDir := t.TempDir()
+		initGitRepo(t, projectDir)
 
 		if err := InitUpstream(projectDir); err != nil {
 			t.Fatalf("InitUpstream: %v", err)
@@ -51,18 +77,72 @@ func TestInitUpstream(t *testing.T) {
 			}
 		}
 
-		// Verify commit message.
+		// Verify commit messages include both original and scaffold.
 		log, err := git(cloneDir, "log", "--oneline")
 		if err != nil {
 			t.Fatalf("git log: %v", err)
 		}
-		if !strings.Contains(log, "metamorph: initial commit") {
-			t.Errorf("expected initial commit message, got: %s", log)
+		if !strings.Contains(log, "metamorph: add scaffold files") {
+			t.Errorf("expected scaffold commit message, got: %s", log)
+		}
+		if !strings.Contains(log, "initial commit") {
+			t.Errorf("expected initial commit from user repo, got: %s", log)
+		}
+	})
+
+	t.Run("skips scaffold commit when files already exist", func(t *testing.T) {
+		projectDir := t.TempDir()
+
+		// Init git repo with scaffold files already present.
+		if _, err := git(projectDir, "init"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(projectDir, "config", "user.name", "test"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(projectDir, "config", "user.email", "test@test"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(projectDir, constants.ProgressFile), []byte("# Progress\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(projectDir, constants.TaskLockDir), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(projectDir, constants.TaskLockDir, ".gitkeep"), []byte(""), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(projectDir, "add", "."); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(projectDir, "commit", "-m", "initial commit with scaffold"); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := InitUpstream(projectDir); err != nil {
+			t.Fatalf("InitUpstream: %v", err)
+		}
+
+		upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
+		cloneDir := filepath.Join(t.TempDir(), "verify")
+		if _, err := git(t.TempDir(), "clone", upstreamPath, cloneDir); err != nil {
+			t.Fatalf("clone for verification: %v", err)
+		}
+
+		// Should NOT have a scaffold commit since files already existed.
+		log, err := git(cloneDir, "log", "--oneline")
+		if err != nil {
+			t.Fatalf("git log: %v", err)
+		}
+		if strings.Contains(log, "metamorph: add scaffold files") {
+			t.Errorf("should not have scaffold commit when files exist, got: %s", log)
 		}
 	})
 
 	t.Run("bare repo has expected refs", func(t *testing.T) {
 		projectDir := t.TempDir()
+		initGitRepo(t, projectDir)
+
 		if err := InitUpstream(projectDir); err != nil {
 			t.Fatalf("InitUpstream: %v", err)
 		}
@@ -76,6 +156,49 @@ func TestInitUpstream(t *testing.T) {
 		}
 		if refs == "" {
 			t.Error("expected at least one ref in bare repo")
+		}
+	})
+
+	t.Run("preserves user repo history", func(t *testing.T) {
+		projectDir := t.TempDir()
+		initGitRepo(t, projectDir)
+
+		// Add a second commit.
+		if err := os.WriteFile(filepath.Join(projectDir, "extra.txt"), []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(projectDir, "add", "."); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(projectDir, "commit", "-m", "add extra file"); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := InitUpstream(projectDir); err != nil {
+			t.Fatalf("InitUpstream: %v", err)
+		}
+
+		upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
+		cloneDir := filepath.Join(t.TempDir(), "verify")
+		if _, err := git(t.TempDir(), "clone", upstreamPath, cloneDir); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify user's commits are present.
+		log, err := git(cloneDir, "log", "--oneline")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(log, "initial commit") {
+			t.Errorf("expected user's initial commit, got: %s", log)
+		}
+		if !strings.Contains(log, "add extra file") {
+			t.Errorf("expected user's second commit, got: %s", log)
+		}
+
+		// Verify the file is present.
+		if _, err := os.Stat(filepath.Join(cloneDir, "extra.txt")); err != nil {
+			t.Error("extra.txt not found — user's files should be in upstream")
 		}
 	})
 
@@ -195,7 +318,7 @@ func TestSyncToWorkingCopy(t *testing.T) {
 			t.Fatalf("SyncToWorkingCopy (initial): %v", err)
 		}
 
-		if !strings.Contains(summary, "metamorph: initial commit") {
+		if !strings.Contains(summary, "initial commit") {
 			t.Errorf("expected initial commit in summary, got: %q", summary)
 		}
 
@@ -348,15 +471,17 @@ func TestCloneForAgent_ConfigErrors(t *testing.T) {
 	})
 }
 
-func TestInitUpstream_GitInitFailure(t *testing.T) {
+func TestInitUpstream_GitCloneFailure(t *testing.T) {
 	// Create projectDir where upstream.git already exists as a file,
-	// so "git init --bare" fails.
+	// so "git clone --bare" fails.
 	projectDir := t.TempDir()
+	initGitRepo(t, projectDir)
+
 	metaDir := filepath.Join(projectDir, ".metamorph")
 	if err := os.MkdirAll(metaDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// Create upstream.git as a regular file — git init --bare will fail.
+	// Create upstream.git as a regular file — git clone --bare will fail.
 	if err := os.WriteFile(filepath.Join(metaDir, "upstream.git"), []byte("not a repo"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -411,4 +536,141 @@ func TestSyncToWorkingCopy_MkdirAllFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "gitops:") {
 		t.Errorf("error should have gitops prefix: %v", err)
 	}
+}
+
+func TestSyncToProjectDir(t *testing.T) {
+	t.Run("merges agent commits into project", func(t *testing.T) {
+		projectDir, upstreamPath := setupUpstream(t)
+
+		// Push a commit to upstream (simulating an agent).
+		pusherDir := filepath.Join(t.TempDir(), "agent")
+		if _, err := git(t.TempDir(), "clone", upstreamPath, pusherDir); err != nil {
+			t.Fatalf("clone for agent: %v", err)
+		}
+		if _, err := git(pusherDir, "config", "user.name", "agent-1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "config", "user.email", "agent-1@metamorph.local"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pusherDir, "feature.go"), []byte("package main\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "add", "."); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "commit", "-m", "feat: add feature"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "push"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Sync to project.
+		summary, err := SyncToProjectDir(upstreamPath, projectDir)
+		if err != nil {
+			t.Fatalf("SyncToProjectDir: %v", err)
+		}
+
+		if !strings.Contains(summary, "feat: add feature") {
+			t.Errorf("expected commit in summary, got: %q", summary)
+		}
+
+		// Verify the file arrived in the project.
+		if _, err := os.Stat(filepath.Join(projectDir, "feature.go")); err != nil {
+			t.Error("feature.go not found in project dir after sync")
+		}
+	})
+
+	t.Run("incremental sync only brings new commits", func(t *testing.T) {
+		projectDir, upstreamPath := setupUpstream(t)
+
+		// Push first commit.
+		pusherDir := filepath.Join(t.TempDir(), "agent")
+		if _, err := git(t.TempDir(), "clone", upstreamPath, pusherDir); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "config", "user.name", "agent-1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "config", "user.email", "agent-1@test"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pusherDir, "first.txt"), []byte("first"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "add", "."); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "commit", "-m", "first commit"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "push"); err != nil {
+			t.Fatal(err)
+		}
+
+		// First sync.
+		summary1, err := SyncToProjectDir(upstreamPath, projectDir)
+		if err != nil {
+			t.Fatalf("first sync: %v", err)
+		}
+		if !strings.Contains(summary1, "first commit") {
+			t.Errorf("expected 'first commit' in summary, got: %q", summary1)
+		}
+
+		// Push second commit.
+		if err := os.WriteFile(filepath.Join(pusherDir, "second.txt"), []byte("second"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "add", "."); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "commit", "-m", "second commit"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "push"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Second sync — should only include the new commit.
+		summary2, err := SyncToProjectDir(upstreamPath, projectDir)
+		if err != nil {
+			t.Fatalf("second sync: %v", err)
+		}
+		if !strings.Contains(summary2, "second commit") {
+			t.Errorf("expected 'second commit' in summary, got: %q", summary2)
+		}
+		if strings.Contains(summary2, "first commit") {
+			t.Errorf("should not include already-synced 'first commit', got: %q", summary2)
+		}
+	})
+
+	t.Run("no-op when up to date", func(t *testing.T) {
+		projectDir, upstreamPath := setupUpstream(t)
+
+		// First sync to bring in any scaffold commits.
+		if _, err := SyncToProjectDir(upstreamPath, projectDir); err != nil {
+			t.Fatalf("initial SyncToProjectDir: %v", err)
+		}
+
+		// Second sync — should be a no-op.
+		summary, err := SyncToProjectDir(upstreamPath, projectDir)
+		if err != nil {
+			t.Fatalf("SyncToProjectDir: %v", err)
+		}
+		if summary != "" {
+			t.Errorf("expected empty summary when up to date, got: %q", summary)
+		}
+	})
+
+	t.Run("errors when not a git repo", func(t *testing.T) {
+		notARepo := t.TempDir()
+		_, err := SyncToProjectDir("/some/upstream", notARepo)
+		if err == nil {
+			t.Fatal("expected error for non-git-repo project dir")
+		}
+		if !strings.Contains(err.Error(), "gitops:") {
+			t.Errorf("error should have gitops prefix: %v", err)
+		}
+	})
 }

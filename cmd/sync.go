@@ -21,7 +21,13 @@ var syncCmd = &cobra.Command{
 		upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
 		workingCopyPath := filepath.Join(projectDir, ".metamorph", "work")
 
-		summary, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath)
+		// Sync upstream to working copy (for task file reading).
+		if _, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath); err != nil {
+			fmt.Printf("Warning: failed to sync working copy: %v\n", err)
+		}
+
+		// Sync agent commits to user's project.
+		summary, err := gitops.SyncToProjectDir(upstreamPath, projectDir)
 		if err != nil {
 			return fmt.Errorf("sync failed: %w", err)
 		}

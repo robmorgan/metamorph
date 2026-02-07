@@ -35,12 +35,17 @@ var stopCmd = &cobra.Command{
 			return fmt.Errorf("failed to stop daemon: %w", err)
 		}
 
-		// Sync upstream to working copy.
+		// Sync upstream to working copy (still needed for task file reading).
 		upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
 		workingCopyPath := filepath.Join(projectDir, ".metamorph", "work")
-		summary, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath)
-		if err != nil {
+		if _, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath); err != nil {
 			fmt.Printf("Warning: failed to sync working copy: %v\n", err)
+		}
+
+		// Sync agent commits to user's project.
+		summary, err := gitops.SyncToProjectDir(upstreamPath, projectDir)
+		if err != nil {
+			fmt.Printf("Warning: failed to sync to project: %v\n", err)
 		} else if summary != "" {
 			fmt.Printf("\nSynced commits:\n%s\n", summary)
 		}

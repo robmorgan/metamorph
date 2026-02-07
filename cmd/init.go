@@ -122,26 +122,42 @@ Add project-specific instructions for your agents here.
 			fmt.Printf("  Created %s/\n", d)
 		}
 
-		// Initialize upstream bare repo.
-		if err := gitops.InitUpstream(absDir); err != nil {
-			return fmt.Errorf("failed to initialize upstream repo: %w", err)
-		}
-		fmt.Println("  Initialized upstream repo")
-
-		// Update upstream with full content: clone to temp, overwrite files, commit, push.
-		upstreamPath := filepath.Join(absDir, constants.UpstreamDir)
-		if err := syncFilesToUpstream(absDir, upstreamPath); err != nil {
-			return fmt.Errorf("failed to sync files to upstream: %w", err)
-		}
-		fmt.Println("  Synced project files to upstream")
-
-		// Write .gitignore.
+		// Write .gitignore before git init so it's included in the initial commit.
 		gitignorePath := filepath.Join(absDir, ".gitignore")
 		gitignoreContent := ".metamorph/\nagent_logs/\n"
 		if err := os.WriteFile(gitignorePath, []byte(gitignoreContent), 0644); err != nil {
 			return fmt.Errorf("failed to write .gitignore: %w", err)
 		}
 		fmt.Println("  Created .gitignore")
+
+		// Ensure the project dir is a git repo (InitUpstream clones from it).
+		if _, err := os.Stat(filepath.Join(absDir, ".git")); os.IsNotExist(err) {
+			if err := runGit(absDir, "init"); err != nil {
+				return fmt.Errorf("failed to init git repo: %w", err)
+			}
+			_ = runGit(absDir, "config", "user.name", "metamorph")
+			_ = runGit(absDir, "config", "user.email", "metamorph@localhost")
+			if err := runGit(absDir, "add", "."); err != nil {
+				return fmt.Errorf("failed to stage files: %w", err)
+			}
+			if err := runGit(absDir, "commit", "-m", "metamorph: initial project setup"); err != nil {
+				return fmt.Errorf("failed to create initial commit: %w", err)
+			}
+			fmt.Println("  Initialized git repo")
+		}
+
+		// Initialize upstream bare repo (clones from user's repo for shared history).
+		if err := gitops.InitUpstream(absDir); err != nil {
+			return fmt.Errorf("failed to initialize upstream repo: %w", err)
+		}
+		fmt.Println("  Initialized upstream repo")
+
+		// Update upstream with full content: clone to temp, copy missing files, commit, push.
+		upstreamPath := filepath.Join(absDir, constants.UpstreamDir)
+		if err := syncFilesToUpstream(absDir, upstreamPath); err != nil {
+			return fmt.Errorf("failed to sync files to upstream: %w", err)
+		}
+		fmt.Println("  Synced project files to upstream")
 
 		fmt.Printf("\nProject %q initialized successfully!\n\n", projectName)
 		fmt.Println("Next steps:")
@@ -161,7 +177,7 @@ func init() {
 }
 
 // syncFilesToUpstream clones the upstream bare repo to a temp dir, copies project
-// files in, commits, and pushes.
+// files in (only if they don't already exist), commits, and pushes.
 func syncFilesToUpstream(projectDir, upstreamPath string) error {
 	tmpDir, err := os.MkdirTemp("", "metamorph-sync-*")
 	if err != nil {
@@ -176,11 +192,14 @@ func syncFilesToUpstream(projectDir, upstreamPath string) error {
 		return fmt.Errorf("failed to clone upstream: %w", err)
 	}
 
-	// Copy project files into the clone.
+	// Copy project files into the clone only if they don't already exist.
 	filesToSync := []string{"metamorph.toml", constants.ProgressFile}
 	for _, name := range filesToSync {
-		src := filepath.Join(projectDir, name)
 		dst := filepath.Join(cloneDir, name)
+		if _, err := os.Stat(dst); err == nil {
+			continue // already exists in upstream
+		}
+		src := filepath.Join(projectDir, name)
 		data, err := os.ReadFile(src)
 		if err != nil {
 			return fmt.Errorf("failed to read %s: %w", name, err)
@@ -194,10 +213,16 @@ func syncFilesToUpstream(projectDir, upstreamPath string) error {
 	_ = runGit(cloneDir, "config", "user.name", "metamorph")
 	_ = runGit(cloneDir, "config", "user.email", "metamorph@localhost")
 
-	// Stage and commit.
+	// Stage and commit only if there are changes.
 	if err := runGit(cloneDir, "add", "."); err != nil {
 		return fmt.Errorf("failed to stage files: %w", err)
 	}
+
+	// Check if there are staged changes before committing.
+	if err := runGit(cloneDir, "diff", "--cached", "--quiet"); err == nil {
+		return nil // nothing to commit
+	}
+
 	if err := runGit(cloneDir, "commit", "-m", "metamorph: sync project files"); err != nil {
 		return fmt.Errorf("failed to commit: %w", err)
 	}
