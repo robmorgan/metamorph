@@ -119,7 +119,7 @@ func TestBuildImage(t *testing.T) {
 		}
 
 		// Verify embedded files were written to .metamorph/docker/.
-		for _, name := range []string{"Dockerfile", "entrypoint.sh", "system_prompt.md"} {
+		for _, name := range []string{"Dockerfile", "entrypoint.sh", "SYSTEM_PROMPT.md"} {
 			path := filepath.Join(projectDir, ".metamorph", "docker", name)
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -225,7 +225,7 @@ func TestStartAgent(t *testing.T) {
 			t.Errorf("logs mount target = %q", logsMount.Target)
 		}
 		promptMount := call.Host.Mounts[2]
-		if promptMount.Target != "/workspace/agent_prompt.md" {
+		if promptMount.Target != "/workspace/AGENT_PROMPT.md" {
 			t.Errorf("prompt mount target = %q", promptMount.Target)
 		}
 		if !promptMount.ReadOnly {

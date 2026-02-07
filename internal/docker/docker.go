@@ -123,7 +123,7 @@ func (c *Client) BuildImage(projectDir string) error {
 	embeddedFiles := map[string]string{
 		"Dockerfile":       assets.DefaultDockerfile,
 		"entrypoint.sh":    assets.DefaultEntrypoint,
-		"system_prompt.md": assets.SystemPrompt,
+		"SYSTEM_PROMPT.md": assets.SystemPrompt,
 	}
 	for name, content := range embeddedFiles {
 		dst := filepath.Join(buildDir, name)
@@ -246,7 +246,7 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 			{
 				Type:     mount.TypeBind,
 				Source:   agentPromptAbs,
-				Target:   "/workspace/agent_prompt.md",
+				Target:   "/workspace/AGENT_PROMPT.md",
 				ReadOnly: true,
 			},
 		},

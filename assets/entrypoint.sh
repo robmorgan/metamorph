@@ -22,11 +22,11 @@ while true; do
 
   git pull --rebase origin main 2>&1 | tee -a "$LOG_FILE"
 
-  cat /system_prompt.md /workspace/agent_prompt.md | envsubst > /tmp/agent_prompt.md
+  cat /SYSTEM_PROMPT.md /workspace/AGENT_PROMPT.md | envsubst > /tmp/AGENT_PROMPT.md
 
   claude --dangerously-skip-permissions \
     --model "${AGENT_MODEL}" \
-    -p "$(cat /tmp/agent_prompt.md)" \
+    -p "$(cat /tmp/AGENT_PROMPT.md)" \
     2>&1 | tee -a "$LOG_FILE" || true
 
   # Push any commits the agent made during this session.
