@@ -23,6 +23,7 @@ RUN npm install -g @anthropic-ai/claude-code
 
 RUN userdel -r ubuntu 2>/dev/null; useradd -m -s /bin/bash -u 1000 agent
 
+COPY system_prompt.md /system_prompt.md
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

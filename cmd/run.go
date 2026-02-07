@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/robmorgan/metamorph/assets"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/gitops"
 	"github.com/spf13/cobra"
@@ -71,15 +72,17 @@ var runCmd = &cobra.Command{
 				pullCmd.Dir = agentDir
 				_ = pullCmd.Run() // best effort
 
-				// Read the agent prompt and expand ${VAR} placeholders.
-				promptPath := filepath.Join(agentDir, constants.AgentPromptFile)
-				promptData, err := os.ReadFile(promptPath)
+				// Read the system prompt (embedded) and user prompt (project dir),
+				// then concatenate and expand ${VAR} placeholders.
+				userPromptPath := filepath.Join(projectDir, constants.AgentPromptFile)
+				userPromptData, err := os.ReadFile(userPromptPath)
 				if err != nil {
-					slog.Error("failed to read agent prompt", "error", err)
+					slog.Error("failed to read user agent prompt", "error", err)
 					return
 				}
 
-				prompt := os.Expand(string(promptData), func(key string) string {
+				combined := assets.SystemPrompt + "\n" + string(userPromptData)
+				prompt := os.Expand(combined, func(key string) string {
 					switch key {
 					case "AGENT_ID":
 						return "0"

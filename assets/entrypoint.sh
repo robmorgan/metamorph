@@ -22,7 +22,7 @@ while true; do
 
   git pull --rebase origin main 2>&1 | tee -a "$LOG_FILE"
 
-  envsubst < AGENT_PROMPT.md > /tmp/agent_prompt.md
+  cat /system_prompt.md /workspace/agent_prompt.md | envsubst > /tmp/agent_prompt.md
 
   claude --dangerously-skip-permissions \
     --model "${AGENT_MODEL}" \

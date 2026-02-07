@@ -121,8 +121,9 @@ func (c *Client) BuildImage(projectDir string) error {
 
 	// Write embedded assets to the build directory.
 	embeddedFiles := map[string]string{
-		"Dockerfile":   assets.DefaultDockerfile,
-		"entrypoint.sh": assets.DefaultEntrypoint,
+		"Dockerfile":       assets.DefaultDockerfile,
+		"entrypoint.sh":    assets.DefaultEntrypoint,
+		"system_prompt.md": assets.SystemPrompt,
 	}
 	for name, content := range embeddedFiles {
 		dst := filepath.Join(buildDir, name)
@@ -187,6 +188,14 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 		return "", fmt.Errorf("docker: failed to resolve upstream path: %w", err)
 	}
 
+	agentPromptAbs, err := filepath.Abs(filepath.Join(opts.ProjectDir, constants.AgentPromptFile))
+	if err != nil {
+		return "", fmt.Errorf("docker: failed to resolve agent prompt path: %w", err)
+	}
+	if _, err := os.Stat(agentPromptAbs); os.IsNotExist(err) {
+		return "", fmt.Errorf("docker: %s not found in project directory (run 'metamorph init' first)", constants.AgentPromptFile)
+	}
+
 	logDir := filepath.Join(opts.ProjectDir, constants.AgentLogDir, fmt.Sprintf("agent-%d", opts.AgentID))
 	logDirAbs, err := filepath.Abs(logDir)
 	if err != nil {
@@ -233,6 +242,12 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 				Type:   mount.TypeBind,
 				Source: logDirAbs,
 				Target: "/workspace/logs",
+			},
+			{
+				Type:     mount.TypeBind,
+				Source:   agentPromptAbs,
+				Target:   "/workspace/agent_prompt.md",
+				ReadOnly: true,
 			},
 		},
 		RestartPolicy: container.RestartPolicy{

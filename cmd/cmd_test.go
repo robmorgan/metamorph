@@ -82,10 +82,6 @@ func testProjectWithUpstream(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(cloneDir, constants.TaskLockDir, ".gitkeep"), []byte(""), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(cloneDir, constants.AgentPromptFile), []byte("# Prompt\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
 	gitExec(t, cloneDir, "add", ".")
 	gitExec(t, cloneDir, "commit", "-m", "seed")
 
@@ -167,6 +163,46 @@ func TestInitCreatesAllFiles(t *testing.T) {
 	}
 	if !strings.Contains(content, "count = 4") {
 		t.Error("config should have default count = 4")
+	}
+
+	// Verify AGENT_PROMPT.md has skeleton template content.
+	promptData, err := os.ReadFile(filepath.Join(dir, constants.AgentPromptFile))
+	if err != nil {
+		t.Fatalf("read agent prompt: %v", err)
+	}
+	promptContent := string(promptData)
+	if !strings.Contains(promptContent, "# Project Instructions") {
+		t.Error("AGENT_PROMPT.md should contain skeleton template")
+	}
+	if !strings.Contains(promptContent, "## Build & Test") {
+		t.Error("AGENT_PROMPT.md should contain Build & Test section")
+	}
+}
+
+func TestInitPreservesExistingPrompt(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "existing-project")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a custom AGENT_PROMPT.md before init.
+	customContent := "# My Custom Prompt\nDo special things.\n"
+	if err := os.WriteFile(filepath.Join(dir, constants.AgentPromptFile), []byte(customContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rootCmd.SetArgs([]string{"init", dir})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	// Verify custom content was preserved.
+	data, err := os.ReadFile(filepath.Join(dir, constants.AgentPromptFile))
+	if err != nil {
+		t.Fatalf("read agent prompt: %v", err)
+	}
+	if string(data) != customContent {
+		t.Errorf("AGENT_PROMPT.md was overwritten, got: %q", string(data))
 	}
 }
 

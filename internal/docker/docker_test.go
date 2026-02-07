@@ -119,7 +119,7 @@ func TestBuildImage(t *testing.T) {
 		}
 
 		// Verify embedded files were written to .metamorph/docker/.
-		for _, name := range []string{"Dockerfile", "entrypoint.sh"} {
+		for _, name := range []string{"Dockerfile", "entrypoint.sh", "system_prompt.md"} {
 			path := filepath.Join(projectDir, ".metamorph", "docker", name)
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -153,6 +153,7 @@ func TestStartAgent(t *testing.T) {
 		projectDir := t.TempDir()
 		upstreamDir := filepath.Join(projectDir, ".metamorph", "upstream.git")
 		_ = os.MkdirAll(upstreamDir, 0755)
+		_ = os.WriteFile(filepath.Join(projectDir, "AGENT_PROMPT.md"), []byte("# Test Prompt\n"), 0644)
 
 		mock := &mockDocker{
 			createResp: container.CreateResponse{ID: "container-abc123"},
@@ -212,8 +213,8 @@ func TestStartAgent(t *testing.T) {
 		}
 
 		// Verify mounts.
-		if len(call.Host.Mounts) != 2 {
-			t.Fatalf("expected 2 mounts, got %d", len(call.Host.Mounts))
+		if len(call.Host.Mounts) != 3 {
+			t.Fatalf("expected 3 mounts, got %d", len(call.Host.Mounts))
 		}
 		upstreamMount := call.Host.Mounts[0]
 		if upstreamMount.Target != "/upstream" || upstreamMount.ReadOnly {
@@ -222,6 +223,13 @@ func TestStartAgent(t *testing.T) {
 		logsMount := call.Host.Mounts[1]
 		if logsMount.Target != "/workspace/logs" {
 			t.Errorf("logs mount target = %q", logsMount.Target)
+		}
+		promptMount := call.Host.Mounts[2]
+		if promptMount.Target != "/workspace/agent_prompt.md" {
+			t.Errorf("prompt mount target = %q", promptMount.Target)
+		}
+		if !promptMount.ReadOnly {
+			t.Error("prompt mount should be read-only")
 		}
 
 		// Verify restart policy.
@@ -238,6 +246,7 @@ func TestStartAgent(t *testing.T) {
 	t.Run("returns error on create failure", func(t *testing.T) {
 		projectDir := t.TempDir()
 		_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+		_ = os.WriteFile(filepath.Join(projectDir, "AGENT_PROMPT.md"), []byte("# Prompt\n"), 0644)
 
 		mock := &mockDocker{createErr: fmt.Errorf("no space")}
 		c := newClientWithAPI("proj", mock)
@@ -254,6 +263,7 @@ func TestStartAgent(t *testing.T) {
 	t.Run("returns error on start failure", func(t *testing.T) {
 		projectDir := t.TempDir()
 		_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+		_ = os.WriteFile(filepath.Join(projectDir, "AGENT_PROMPT.md"), []byte("# Prompt\n"), 0644)
 
 		mock := &mockDocker{
 			createResp: container.CreateResponse{ID: "cid"},
@@ -452,6 +462,7 @@ func TestContainerNamingConvention(t *testing.T) {
 		t.Run(tt.want, func(t *testing.T) {
 			projectDir := t.TempDir()
 			_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+			_ = os.WriteFile(filepath.Join(projectDir, "AGENT_PROMPT.md"), []byte("# Prompt\n"), 0644)
 
 			mock := &mockDocker{
 				createResp: container.CreateResponse{ID: "test-id"},
@@ -498,6 +509,7 @@ func TestStopAllAgents_CallsStopForEach(t *testing.T) {
 func TestStartAgent_PassesCorrectConfig(t *testing.T) {
 	projectDir := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+	_ = os.WriteFile(filepath.Join(projectDir, "AGENT_PROMPT.md"), []byte("# Prompt\n"), 0644)
 
 	mock := &mockDocker{
 		createResp: container.CreateResponse{ID: "cid-test"},
@@ -544,6 +556,7 @@ func TestStartAgent_PassesCorrectConfig(t *testing.T) {
 func TestStartAgent_PassesOAuthToken(t *testing.T) {
 	projectDir := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+	_ = os.WriteFile(filepath.Join(projectDir, "AGENT_PROMPT.md"), []byte("# Prompt\n"), 0644)
 
 	mock := &mockDocker{
 		createResp: container.CreateResponse{ID: "cid-oauth"},
@@ -579,6 +592,7 @@ func TestStartAgent_PassesOAuthToken(t *testing.T) {
 func TestStartAgent_OAuthTakesPrecedence(t *testing.T) {
 	projectDir := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+	_ = os.WriteFile(filepath.Join(projectDir, "AGENT_PROMPT.md"), []byte("# Prompt\n"), 0644)
 
 	mock := &mockDocker{
 		createResp: container.CreateResponse{ID: "cid-both"},
@@ -615,6 +629,7 @@ func TestStartAgent_OAuthTakesPrecedence(t *testing.T) {
 func TestStartAgent_PassesGitAuthor(t *testing.T) {
 	projectDir := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+	_ = os.WriteFile(filepath.Join(projectDir, "AGENT_PROMPT.md"), []byte("# Prompt\n"), 0644)
 
 	mock := &mockDocker{
 		createResp: container.CreateResponse{ID: "cid-git"},
@@ -652,6 +667,7 @@ func TestStartAgent_PassesGitAuthor(t *testing.T) {
 func TestStartAgent_OmitsGitAuthorWhenEmpty(t *testing.T) {
 	projectDir := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+	_ = os.WriteFile(filepath.Join(projectDir, "AGENT_PROMPT.md"), []byte("# Prompt\n"), 0644)
 
 	mock := &mockDocker{
 		createResp: container.CreateResponse{ID: "cid-no-git"},

@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/robmorgan/metamorph/assets"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/gitops"
 	"github.com/spf13/cobra"
@@ -70,16 +69,34 @@ author_email = ""
 		}
 		fmt.Println("  Created metamorph.toml")
 
-		// Write AGENT_PROMPT.md from embedded template.
+		// Write AGENT_PROMPT.md skeleton only if it doesn't already exist.
 		agentPromptPath := filepath.Join(absDir, constants.AgentPromptFile)
-		if err := os.WriteFile(agentPromptPath, []byte(assets.DefaultAgentPrompt), 0644); err != nil {
-			return fmt.Errorf("failed to write AGENT_PROMPT.md: %w", err)
-		}
-		fmt.Println("  Created AGENT_PROMPT.md")
+		if _, err := os.Stat(agentPromptPath); os.IsNotExist(err) {
+			skeleton := `# Project Instructions
 
-		// Write PROGRESS.md.
+Add project-specific instructions for your agents here.
+
+## Build & Test
+<!-- e.g., cargo test, go test ./... -->
+
+## Architecture
+<!-- Describe key files and project structure -->
+
+## Task List
+<!-- List tasks for agents to work on -->
+`
+			if err := os.WriteFile(agentPromptPath, []byte(skeleton), 0644); err != nil {
+				return fmt.Errorf("failed to write AGENT_PROMPT.md: %w", err)
+			}
+			fmt.Println("  Created AGENT_PROMPT.md")
+		} else {
+			fmt.Println("  Using existing AGENT_PROMPT.md")
+		}
+
+		// Write PROGRESS.md only if it doesn't already exist.
 		progressPath := filepath.Join(absDir, constants.ProgressFile)
-		progressContent := `# Progress
+		if _, err := os.Stat(progressPath); os.IsNotExist(err) {
+			progressContent := `# Progress
 
 ## Completed
 
@@ -89,11 +106,13 @@ author_email = ""
 
 ## Notes
 `
-
-		if err := os.WriteFile(progressPath, []byte(progressContent), 0644); err != nil {
-			return fmt.Errorf("failed to write PROGRESS.md: %w", err)
+			if err := os.WriteFile(progressPath, []byte(progressContent), 0644); err != nil {
+				return fmt.Errorf("failed to write PROGRESS.md: %w", err)
+			}
+			fmt.Println("  Created PROGRESS.md")
+		} else {
+			fmt.Println("  Using existing PROGRESS.md")
 		}
-		fmt.Println("  Created PROGRESS.md")
 
 		// Create directories.
 		for _, d := range []string{constants.TaskLockDir, constants.AgentLogDir} {
@@ -158,7 +177,7 @@ func syncFilesToUpstream(projectDir, upstreamPath string) error {
 	}
 
 	// Copy project files into the clone.
-	filesToSync := []string{"metamorph.toml", constants.AgentPromptFile, constants.ProgressFile}
+	filesToSync := []string{"metamorph.toml", constants.ProgressFile}
 	for _, name := range filesToSync {
 		src := filepath.Join(projectDir, name)
 		dst := filepath.Join(cloneDir, name)

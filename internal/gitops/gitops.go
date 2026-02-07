@@ -53,8 +53,7 @@ func InitUpstream(projectDir string) error {
 
 	// Create seed files.
 	files := map[string]string{
-		constants.AgentPromptFile:                    "# Agent Prompt\n",
-		constants.ProgressFile:                       "# Progress\n",
+		constants.ProgressFile:                            "# Progress\n",
 		filepath.Join(constants.TaskLockDir, ".gitkeep"): "",
 	}
 	for relPath, content := range files {

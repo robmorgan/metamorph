@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/robmorgan/metamorph/assets"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/spf13/cobra"
 )
@@ -14,6 +15,13 @@ var promptCmd = &cobra.Command{
 	Use:   "prompt",
 	Short: "Manage agent prompt templates",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		showSystem, _ := cmd.Flags().GetBool("show-system")
+
+		if showSystem {
+			fmt.Print(assets.SystemPrompt)
+			return nil
+		}
+
 		projectDir, err := resolveProjectDir()
 		if err != nil {
 			return err
@@ -51,6 +59,7 @@ var promptCmd = &cobra.Command{
 
 func init() {
 	promptCmd.Flags().Bool("show", false, "Show the agent prompt (default)")
+	promptCmd.Flags().Bool("show-system", false, "Show the built-in system prompt")
 	promptCmd.Flags().Bool("edit", false, "Open the agent prompt in $EDITOR")
 	rootCmd.AddCommand(promptCmd)
 }

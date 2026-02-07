@@ -2,8 +2,8 @@ package assets
 
 import _ "embed"
 
-//go:embed agent_prompt.md
-var DefaultAgentPrompt string
+//go:embed system_prompt.md
+var SystemPrompt string
 
 //go:embed entrypoint.sh
 var DefaultEntrypoint string

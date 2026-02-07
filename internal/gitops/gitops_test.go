@@ -43,7 +43,6 @@ func TestInitUpstream(t *testing.T) {
 		}
 
 		for _, f := range []string{
-			constants.AgentPromptFile,
 			constants.ProgressFile,
 			filepath.Join(constants.TaskLockDir, ".gitkeep"),
 		} {
@@ -130,8 +129,8 @@ func TestCloneForAgent(t *testing.T) {
 		}
 
 		// Verify seed files are present.
-		if _, err := os.Stat(filepath.Join(destDir, constants.AgentPromptFile)); err != nil {
-			t.Error("AGENT_PROMPT.md not found in clone")
+		if _, err := os.Stat(filepath.Join(destDir, constants.ProgressFile)); err != nil {
+			t.Error("PROGRESS.md not found in clone")
 		}
 	})
 
