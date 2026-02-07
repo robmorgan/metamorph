@@ -217,10 +217,9 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 	hostConfig := &container.HostConfig{
 		Mounts: []mount.Mount{
 			{
-				Type:     mount.TypeBind,
-				Source:   upstreamAbs,
-				Target:   "/upstream",
-				ReadOnly: true,
+				Type:   mount.TypeBind,
+				Source: upstreamAbs,
+				Target: "/upstream",
 			},
 			{
 				Type:   mount.TypeBind,

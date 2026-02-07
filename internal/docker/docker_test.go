@@ -216,8 +216,8 @@ func TestStartAgent(t *testing.T) {
 			t.Fatalf("expected 2 mounts, got %d", len(call.Host.Mounts))
 		}
 		upstreamMount := call.Host.Mounts[0]
-		if upstreamMount.Target != "/upstream" || !upstreamMount.ReadOnly {
-			t.Errorf("upstream mount: target=%q, ro=%v", upstreamMount.Target, upstreamMount.ReadOnly)
+		if upstreamMount.Target != "/upstream" || upstreamMount.ReadOnly {
+			t.Errorf("upstream mount: target=%q, ro=%v (expected ro=false)", upstreamMount.Target, upstreamMount.ReadOnly)
 		}
 		logsMount := call.Host.Mounts[1]
 		if logsMount.Target != "/workspace/logs" {
