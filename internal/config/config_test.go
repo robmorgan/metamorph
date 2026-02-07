@@ -2,7 +2,9 @@ package config
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -336,5 +338,71 @@ model = "claude-sonnet"
 	}
 	if len(cfg.Agents.Roles) != 0 {
 		t.Errorf("Agents.Roles should be empty, got %v", cfg.Agents.Roles)
+	}
+}
+
+func TestApplyDefaults_GitAuthorFromHostConfig(t *testing.T) {
+	// Get the host's git config values for comparison.
+	wantName := ""
+	if out, err := exec.Command("git", "config", "user.name").Output(); err == nil {
+		wantName = strings.TrimSpace(string(out))
+	}
+	wantEmail := ""
+	if out, err := exec.Command("git", "config", "user.email").Output(); err == nil {
+		wantEmail = strings.TrimSpace(string(out))
+	}
+
+	if wantName == "" && wantEmail == "" {
+		t.Skip("no git config user.name/user.email set on host")
+	}
+
+	dir := t.TempDir()
+	path := writeConfig(t, dir, `
+[project]
+name = "git-defaults"
+
+[agents]
+count = 1
+model = "claude-sonnet"
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if wantName != "" && cfg.Git.AuthorName != wantName {
+		t.Errorf("Git.AuthorName = %q, want %q (from git config)", cfg.Git.AuthorName, wantName)
+	}
+	if wantEmail != "" && cfg.Git.AuthorEmail != wantEmail {
+		t.Errorf("Git.AuthorEmail = %q, want %q (from git config)", cfg.Git.AuthorEmail, wantEmail)
+	}
+}
+
+func TestApplyDefaults_GitAuthorExplicitNotOverridden(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, dir, `
+[project]
+name = "git-explicit"
+
+[agents]
+count = 1
+model = "claude-sonnet"
+
+[git]
+author_name = "Explicit Name"
+author_email = "explicit@example.com"
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Git.AuthorName != "Explicit Name" {
+		t.Errorf("Git.AuthorName = %q, want %q", cfg.Git.AuthorName, "Explicit Name")
+	}
+	if cfg.Git.AuthorEmail != "explicit@example.com" {
+		t.Errorf("Git.AuthorEmail = %q, want %q", cfg.Git.AuthorEmail, "explicit@example.com")
 	}
 }

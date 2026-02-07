@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/robmorgan/metamorph/internal/constants"
@@ -72,6 +74,16 @@ func Load(path string) (*Config, error) {
 func applyDefaults(cfg *Config) {
 	if cfg.Docker.Image == "" {
 		cfg.Docker.Image = "metamorph-agent:latest"
+	}
+	if cfg.Git.AuthorName == "" {
+		if name, err := exec.Command("git", "config", "user.name").Output(); err == nil {
+			cfg.Git.AuthorName = strings.TrimSpace(string(name))
+		}
+	}
+	if cfg.Git.AuthorEmail == "" {
+		if email, err := exec.Command("git", "config", "user.email").Output(); err == nil {
+			cfg.Git.AuthorEmail = strings.TrimSpace(string(email))
+		}
 	}
 }
 
