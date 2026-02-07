@@ -21,6 +21,9 @@ while true; do
     -p "$(cat /tmp/agent_prompt.md)" \
     2>&1 | tee -a "$LOG_FILE" || true
 
+  # Push any commits the agent made during this session.
+  git push origin main 2>&1 | tee -a "$LOG_FILE" || true
+
   echo "[$(date)] Session $SESSION ended, restarting in 5s..." | tee -a "$LOG_FILE"
   sleep 5
 done
