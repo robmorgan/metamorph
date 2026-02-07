@@ -20,18 +20,43 @@ while true; do
   LOG_FILE="/workspace/logs/session-${SESSION}.log"
   echo "[$(date)] Starting session $SESSION as ${AGENT_ROLE}" | tee -a "$LOG_FILE"
 
-  git pull --rebase origin main 2>&1 | tee -a "$LOG_FILE"
+  # Stash any uncommitted changes from the previous session
+  STASH_RESULT=$(git stash --include-untracked 2>&1)
+  echo "$STASH_RESULT" | tee -a "$LOG_FILE"
+
+  git pull --rebase origin main 2>&1 | tee -a "$LOG_FILE" || true
+
+  # Restore stashed changes if any were stashed
+  if echo "$STASH_RESULT" | grep -q "Saved working directory"; then
+    git stash pop 2>&1 | tee -a "$LOG_FILE" || true
+  fi
 
   cat /SYSTEM_PROMPT.md /workspace/AGENT_PROMPT.md | envsubst > /tmp/AGENT_PROMPT.md
+
+  echo "[$(date)] Launching Claude Code (model: ${AGENT_MODEL})..." | tee -a "$LOG_FILE"
+
+  SESSION_START=$(date +%s)
 
   claude --dangerously-skip-permissions \
     --model "${AGENT_MODEL}" \
     -p "$(cat /tmp/AGENT_PROMPT.md)" \
     2>&1 | tee -a "$LOG_FILE" || true
 
-  # Push any commits the agent made during this session.
-  git push origin main 2>&1 | tee -a "$LOG_FILE" || true
+  SESSION_END=$(date +%s)
+  SESSION_DURATION=$((SESSION_END - SESSION_START))
 
-  echo "[$(date)] Session $SESSION ended, restarting in 5s..." | tee -a "$LOG_FILE"
-  sleep 5
+  # Push any commits the agent made during this session.
+  if ! git push origin main 2>&1 | tee -a "$LOG_FILE"; then
+    echo "[$(date)] Push failed, pulling and retrying..." | tee -a "$LOG_FILE"
+    git pull --rebase origin main 2>&1 | tee -a "$LOG_FILE" || true
+    git push origin main 2>&1 | tee -a "$LOG_FILE" || true
+  fi
+
+  if [ "$SESSION_DURATION" -lt 30 ]; then
+    echo "[$(date)] Session lasted ${SESSION_DURATION}s (possible rate limit), backing off 300s..." | tee -a "$LOG_FILE"
+    sleep 300
+  else
+    echo "[$(date)] Session $SESSION ended, restarting in 5s..." | tee -a "$LOG_FILE"
+    sleep 5
+  fi
 done

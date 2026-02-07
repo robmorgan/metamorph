@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -67,10 +68,23 @@ var runCmd = &cobra.Command{
 		go func() {
 			defer close(done)
 			for {
+				// Stash any uncommitted changes from the previous session.
+				stashCmd := exec.Command("git", "stash", "--include-untracked")
+				stashCmd.Dir = agentDir
+				stashOut, _ := stashCmd.CombinedOutput()
+				stashedChanges := strings.Contains(string(stashOut), "Saved working directory")
+
 				// Pull latest changes.
 				pullCmd := exec.Command("git", "pull", "--rebase", "origin", "HEAD")
 				pullCmd.Dir = agentDir
 				_ = pullCmd.Run() // best effort
+
+				// Restore stashed changes if any were stashed.
+				if stashedChanges {
+					popCmd := exec.Command("git", "stash", "pop")
+					popCmd.Dir = agentDir
+					_ = popCmd.Run() // best effort
+				}
 
 				// Read the system prompt (embedded) and user prompt (project dir),
 				// then concatenate and expand ${VAR} placeholders.
@@ -100,7 +114,7 @@ var runCmd = &cobra.Command{
 				claudeCmd.Dir = agentDir
 				claudeCmd.Stdout = os.Stdout
 				claudeCmd.Stderr = os.Stderr
-					claudeEnv := os.Environ()
+				claudeEnv := os.Environ()
 				if oauthToken != "" {
 					claudeEnv = append(claudeEnv, "CLAUDE_CODE_OAUTH_TOKEN="+oauthToken)
 				} else if apiKey != "" {
@@ -108,16 +122,38 @@ var runCmd = &cobra.Command{
 				}
 				claudeCmd.Env = claudeEnv
 
+				sessionStart := time.Now()
+
 				if err := claudeCmd.Run(); err != nil {
 					slog.Error("claude exited with error", "error", err)
+				}
+
+				sessionDuration := time.Since(sessionStart)
+
+				// Push any commits the agent made during this session.
+				pushCmd := exec.Command("git", "push", "origin", "HEAD")
+				pushCmd.Dir = agentDir
+				if err := pushCmd.Run(); err != nil {
+					slog.Warn("push failed, pulling and retrying", "error", err)
+					retryPull := exec.Command("git", "pull", "--rebase", "origin", "HEAD")
+					retryPull.Dir = agentDir
+					_ = retryPull.Run()
+					retryPush := exec.Command("git", "push", "origin", "HEAD")
+					retryPush.Dir = agentDir
+					_ = retryPush.Run()
 				}
 
 				if once {
 					return
 				}
 
-				slog.Info("sleeping before next iteration")
-				time.Sleep(5 * time.Second)
+				if sessionDuration < 30*time.Second {
+					slog.Warn("session lasted under 30s (possible rate limit), backing off 5m", "duration", sessionDuration)
+					time.Sleep(5 * time.Minute)
+				} else {
+					slog.Info("sleeping before next iteration", "duration", sessionDuration)
+					time.Sleep(5 * time.Second)
+				}
 			}
 		}()
 
