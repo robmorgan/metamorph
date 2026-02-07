@@ -14,6 +14,7 @@ type Config struct {
 	Docker        DockerConfig        `toml:"docker"`
 	Testing       TestingConfig       `toml:"testing"`
 	Notifications NotificationsConfig `toml:"notifications"`
+	Git           GitConfig           `toml:"git"`
 }
 
 type ProjectConfig struct {
@@ -39,6 +40,11 @@ type TestingConfig struct {
 
 type NotificationsConfig struct {
 	WebhookURL string `toml:"webhook_url"`
+}
+
+type GitConfig struct {
+	AuthorName  string `toml:"author_name"`
+	AuthorEmail string `toml:"author_email"`
 }
 
 // Load reads a TOML config file from path and validates it.

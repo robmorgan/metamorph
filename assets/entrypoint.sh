@@ -3,8 +3,16 @@ set -e
 
 git clone /upstream /workspace/repo
 cd /workspace/repo
-git config user.name "agent-${AGENT_ID}"
-git config user.email "agent-${AGENT_ID}@metamorph.local"
+if [ -n "$GIT_AUTHOR_NAME" ]; then
+  git config user.name "$GIT_AUTHOR_NAME"
+else
+  git config user.name "$(git log -1 --format='%an' 2>/dev/null || echo "agent-${AGENT_ID}")"
+fi
+if [ -n "$GIT_AUTHOR_EMAIL" ]; then
+  git config user.email "$GIT_AUTHOR_EMAIL"
+else
+  git config user.email "$(git log -1 --format='%ae' 2>/dev/null || echo "agent-${AGENT_ID}@metamorph.local")"
+fi
 
 SESSION=0
 while true; do

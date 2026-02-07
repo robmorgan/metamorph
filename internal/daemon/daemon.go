@@ -361,12 +361,14 @@ func (d *Daemon) startAgents(ctx context.Context) ([]AgentState, error) {
 
 		slog.Info("starting agent", "agent", i, "role", role)
 		containerID, err := d.docker.StartAgent(ctx, docker.AgentOpts{
-			ProjectDir: d.projectDir,
-			AgentID:    i,
-			Role:       role,
-			Model:      d.cfg.Agents.Model,
-			APIKey:     d.apiKey,
-			OAuthToken: d.oauthToken,
+			ProjectDir:     d.projectDir,
+			AgentID:        i,
+			Role:           role,
+			Model:          d.cfg.Agents.Model,
+			APIKey:         d.apiKey,
+			OAuthToken:     d.oauthToken,
+			GitAuthorName:  d.cfg.Git.AuthorName,
+			GitAuthorEmail: d.cfg.Git.AuthorEmail,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to start agent-%d: %w", i, err)
@@ -465,12 +467,14 @@ func (d *Daemon) restartCrashedAgents(ctx context.Context, infos []docker.AgentI
 
 		// Restart.
 		containerID, err := d.docker.StartAgent(ctx, docker.AgentOpts{
-			ProjectDir: d.projectDir,
-			AgentID:    a.ID,
-			Role:       a.Role,
-			Model:      d.cfg.Agents.Model,
-			APIKey:     d.apiKey,
-			OAuthToken: d.oauthToken,
+			ProjectDir:     d.projectDir,
+			AgentID:        a.ID,
+			Role:           a.Role,
+			Model:          d.cfg.Agents.Model,
+			APIKey:         d.apiKey,
+			OAuthToken:     d.oauthToken,
+			GitAuthorName:  d.cfg.Git.AuthorName,
+			GitAuthorEmail: d.cfg.Git.AuthorEmail,
 		})
 		if err == nil {
 			a.ContainerID = containerID

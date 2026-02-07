@@ -40,12 +40,14 @@ const (
 
 // AgentOpts configures a new agent container.
 type AgentOpts struct {
-	ProjectDir string
-	AgentID    int
-	Role       string
-	Model      string
-	APIKey     string // Anthropic API key (if set)
-	OAuthToken string // Claude Code OAuth token (if set, preferred over APIKey)
+	ProjectDir     string
+	AgentID        int
+	Role           string
+	Model          string
+	APIKey         string // Anthropic API key (if set)
+	OAuthToken     string // Claude Code OAuth token (if set, preferred over APIKey)
+	GitAuthorName  string // Git author name for commits (optional)
+	GitAuthorEmail string // Git author email for commits (optional)
 }
 
 // AgentInfo describes a running agent container.
@@ -203,6 +205,12 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+opts.OAuthToken)
 	} else if opts.APIKey != "" {
 		env = append(env, "ANTHROPIC_API_KEY="+opts.APIKey)
+	}
+	if opts.GitAuthorName != "" {
+		env = append(env, "GIT_AUTHOR_NAME="+opts.GitAuthorName)
+	}
+	if opts.GitAuthorEmail != "" {
+		env = append(env, "GIT_AUTHOR_EMAIL="+opts.GitAuthorEmail)
 	}
 
 	config := &container.Config{

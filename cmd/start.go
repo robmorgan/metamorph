@@ -61,6 +61,14 @@ func runDaemonMode(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
+	// Override git author from env vars if set.
+	if name := os.Getenv("GIT_AUTHOR_NAME"); name != "" {
+		cfg.Git.AuthorName = name
+	}
+	if email := os.Getenv("GIT_AUTHOR_EMAIL"); email != "" {
+		cfg.Git.AuthorEmail = email
+	}
+
 	dockerClient, err := docker.NewClient(cfg.Project.Name)
 	if err != nil {
 		return fmt.Errorf("failed to create Docker client: %w", err)
@@ -78,6 +86,14 @@ func runForegroundStart(cmd *cobra.Command) error {
 	cfg, err := loadConfig(projectDir)
 	if err != nil {
 		return err
+	}
+
+	// Override git author from env vars if set.
+	if name := os.Getenv("GIT_AUTHOR_NAME"); name != "" {
+		cfg.Git.AuthorName = name
+	}
+	if email := os.Getenv("GIT_AUTHOR_EMAIL"); email != "" {
+		cfg.Git.AuthorEmail = email
 	}
 
 	// Check that the project has been initialized (upstream repo exists).

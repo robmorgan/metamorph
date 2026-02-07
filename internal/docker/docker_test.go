@@ -612,6 +612,78 @@ func TestStartAgent_OAuthTakesPrecedence(t *testing.T) {
 	}
 }
 
+func TestStartAgent_PassesGitAuthor(t *testing.T) {
+	projectDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+
+	mock := &mockDocker{
+		createResp: container.CreateResponse{ID: "cid-git"},
+	}
+	c := newClientWithAPI("test-proj", mock)
+
+	opts := AgentOpts{
+		ProjectDir:     projectDir,
+		AgentID:        1,
+		Role:           "developer",
+		Model:          "claude-opus",
+		APIKey:         "sk-test-123",
+		GitAuthorName:  "Jane Doe",
+		GitAuthorEmail: "jane@example.com",
+	}
+
+	_, err := c.StartAgent(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+
+	envMap := map[string]string{}
+	for _, e := range mock.created[0].Config.Env {
+		parts := strings.SplitN(e, "=", 2)
+		envMap[parts[0]] = parts[1]
+	}
+	if envMap["GIT_AUTHOR_NAME"] != "Jane Doe" {
+		t.Errorf("GIT_AUTHOR_NAME = %q, want %q", envMap["GIT_AUTHOR_NAME"], "Jane Doe")
+	}
+	if envMap["GIT_AUTHOR_EMAIL"] != "jane@example.com" {
+		t.Errorf("GIT_AUTHOR_EMAIL = %q, want %q", envMap["GIT_AUTHOR_EMAIL"], "jane@example.com")
+	}
+}
+
+func TestStartAgent_OmitsGitAuthorWhenEmpty(t *testing.T) {
+	projectDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(projectDir, ".metamorph", "upstream.git"), 0755)
+
+	mock := &mockDocker{
+		createResp: container.CreateResponse{ID: "cid-no-git"},
+	}
+	c := newClientWithAPI("test-proj", mock)
+
+	opts := AgentOpts{
+		ProjectDir: projectDir,
+		AgentID:    1,
+		Role:       "developer",
+		Model:      "claude-opus",
+		APIKey:     "sk-test-123",
+	}
+
+	_, err := c.StartAgent(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+
+	envMap := map[string]string{}
+	for _, e := range mock.created[0].Config.Env {
+		parts := strings.SplitN(e, "=", 2)
+		envMap[parts[0]] = parts[1]
+	}
+	if _, ok := envMap["GIT_AUTHOR_NAME"]; ok {
+		t.Errorf("GIT_AUTHOR_NAME should not be set when empty")
+	}
+	if _, ok := envMap["GIT_AUTHOR_EMAIL"]; ok {
+		t.Errorf("GIT_AUTHOR_EMAIL should not be set when empty")
+	}
+}
+
 func TestDockerClientInterface(t *testing.T) {
 	// Verify the interface is usable with a mock.
 	var _ DockerClient = (*Client)(nil)
