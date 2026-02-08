@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,87 @@ import (
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/spf13/cobra"
 )
+
+// Stream-JSON event types emitted by Claude Code with --output-format stream-json.
+type streamEvent struct {
+	Type  string     `json:"type"`
+	Event eventInner `json:"event"`
+}
+
+type eventInner struct {
+	Type         string        `json:"type"`
+	ContentBlock *contentBlock `json:"content_block,omitempty"`
+	Delta        *delta        `json:"delta,omitempty"`
+	Error        *errorInfo    `json:"error,omitempty"`
+}
+
+type contentBlock struct {
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
+}
+
+type delta struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+type errorInfo struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// formatLogLine parses a stream-json line and returns a human-readable string.
+// Non-JSON lines (e.g. entrypoint echo output) are returned as-is.
+// Returns the formatted string and whether it should be printed (empty means skip).
+func formatLogLine(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", false
+	}
+
+	if trimmed[0] != '{' {
+		return line, true
+	}
+
+	var ev streamEvent
+	if err := json.Unmarshal([]byte(trimmed), &ev); err != nil {
+		return line, true
+	}
+
+	inner := ev.Event
+
+	switch inner.Type {
+	case "content_block_start":
+		if inner.ContentBlock != nil && inner.ContentBlock.Type == "tool_use" {
+			return "[tool] " + inner.ContentBlock.Name, true
+		}
+		return "", false
+
+	case "content_block_delta":
+		if inner.Delta == nil {
+			return "", false
+		}
+		switch inner.Delta.Type {
+		case "text_delta":
+			return inner.Delta.Text, true
+		case "thinking_delta", "input_json_delta":
+			return "", false
+		}
+		return "", false
+
+	case "content_block_stop", "message_start", "message_delta", "message_stop", "ping":
+		return "", false
+
+	case "error":
+		if inner.Error != nil {
+			return "[error] " + inner.Error.Type + " - " + inner.Error.Message, true
+		}
+		return "[error] unknown", true
+
+	default:
+		return "", false
+	}
+}
 
 var logsCmd = &cobra.Command{
 	Use:   "logs <agent-id>",
@@ -55,7 +137,9 @@ var logsCmd = &cobra.Command{
 			start = len(lines) - tail
 		}
 		for _, line := range lines[start:] {
-			fmt.Println(line)
+			if formatted, ok := formatLogLine(line); ok {
+				fmt.Println(formatted)
+			}
 		}
 
 		if !follow {
@@ -103,8 +187,13 @@ var logsCmd = &cobra.Command{
 				}
 
 				if len(newData) > 0 {
-					fmt.Print(string(newData))
 					offset += int64(len(newData))
+					newLines := strings.Split(string(newData), "\n")
+					for _, line := range newLines {
+						if formatted, ok := formatLogLine(line); ok {
+							fmt.Println(formatted)
+						}
+					}
 				}
 			}
 		}

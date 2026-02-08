@@ -39,6 +39,7 @@ while true; do
 
   claude --dangerously-skip-permissions \
     --model "${AGENT_MODEL}" \
+    --output-format stream-json \
     -p "$(cat /tmp/AGENT_PROMPT.md)" \
     2>&1 | tee -a "$LOG_FILE" || true
 
