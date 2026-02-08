@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,8 @@ func dockerFrame(payload string) []byte {
 
 // mockDocker implements the dockerAPI interface for testing.
 type mockDocker struct {
+	mu sync.Mutex // protects tracked call slices for concurrent use
+
 	pingErr     error
 	buildErr    error
 	buildBody   string
@@ -83,12 +86,16 @@ func (m *mockDocker) ContainerStart(ctx context.Context, containerID string, opt
 }
 
 func (m *mockDocker) ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error {
+	m.mu.Lock()
 	m.stopped = append(m.stopped, containerID)
+	m.mu.Unlock()
 	return m.stopErr
 }
 
 func (m *mockDocker) ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error {
+	m.mu.Lock()
 	m.removed = append(m.removed, containerID)
+	m.mu.Unlock()
 	return m.removeErr
 }
 
