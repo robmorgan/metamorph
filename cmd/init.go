@@ -58,10 +58,6 @@ fast_command = ""
 
 [notifications]
 webhook_url = ""
-
-[git]
-author_name = ""
-author_email = ""
 `, projectName)
 
 		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
