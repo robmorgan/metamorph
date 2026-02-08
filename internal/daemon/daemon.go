@@ -20,6 +20,7 @@ import (
 	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/docker"
+	"github.com/robmorgan/metamorph/internal/gitops"
 	"github.com/robmorgan/metamorph/internal/notify"
 	"github.com/robmorgan/metamorph/internal/tasks"
 )
@@ -77,6 +78,7 @@ type Daemon struct {
 	commitBatchStart  time.Time            // when the current commit batch started
 	pendingCommits    []string             // commit messages accumulated during batch window
 	lastErrorNotified map[int]time.Time    // agentID → last time we sent test_failure for this agent
+	hasNewCommits     bool                 // true when new commits detected this tick
 }
 
 // Start launches the daemon as a background subprocess. It re-execs the
@@ -409,6 +411,12 @@ func (d *Daemon) monitor(ctx context.Context) {
 	// Count commits and notify if new ones detected.
 	d.countCommitsAndNotify(now)
 
+	// Sync repos when new commits are detected.
+	if d.hasNewCommits {
+		d.syncRepos()
+		d.hasNewCommits = false
+	}
+
 	// Clear stale task locks and notify.
 	d.clearStaleTasksAndNotify(now)
 
@@ -534,6 +542,8 @@ func (d *Daemon) countCommitsAndNotify(now time.Time) {
 
 	newCommits := count - d.prevCommitCount
 	if d.prevCommitCount > 0 && newCommits > 0 {
+		d.hasNewCommits = true
+
 		// Read the latest commit messages.
 		logCmd := exec.Command("git", "log", "--oneline", fmt.Sprintf("-%d", newCommits))
 		logCmd.Dir = upstreamPath
@@ -679,9 +689,27 @@ func (d *Daemon) sendEvent(event notify.Event) {
 	}
 }
 
+// syncRepos syncs the upstream bare repo to both the working copy and the
+// user's project directory so changes are visible without running `metamorph sync`.
+func (d *Daemon) syncRepos() {
+	upstreamPath := filepath.Join(d.projectDir, constants.UpstreamDir)
+	workingCopyPath := filepath.Join(d.projectDir, ".metamorph", "work")
+
+	if _, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath); err != nil {
+		slog.Warn("periodic sync to working copy failed", "error", err)
+	}
+
+	if _, err := gitops.SyncToProjectDir(upstreamPath, d.projectDir); err != nil {
+		slog.Warn("periodic sync to project dir failed", "error", err)
+	}
+}
+
 // shutdown stops all agents and writes final state.
 func (d *Daemon) shutdown(ctx context.Context) error {
 	_ = d.docker.StopAllAgents(ctx)
+
+	// Final sync so the latest agent work is visible in the project dir.
+	d.syncRepos()
 
 	d.state.Status = "stopped"
 	d.state.Stats.UptimeSeconds = int(time.Since(d.startedAt).Seconds())
