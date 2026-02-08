@@ -193,7 +193,11 @@ func SyncToProjectDir(upstreamPath, projectDir string) (string, error) {
 	// Detect the default branch in upstream.
 	branch, err := git(upstreamPath, "symbolic-ref", "--short", "HEAD")
 	if err != nil {
-		branch = "main" // fallback
+		// Fallback: detect from project dir.
+		branch, err = git(projectDir, "rev-parse", "--abbrev-ref", "HEAD")
+		if err != nil {
+			return "", fmt.Errorf("gitops: failed to detect branch name: %w", err)
+		}
 	}
 
 	// Fetch from upstream.

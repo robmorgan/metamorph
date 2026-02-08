@@ -24,7 +24,7 @@ while true; do
   STASH_RESULT=$(git stash --include-untracked 2>&1)
   echo "$STASH_RESULT" | tee -a "$LOG_FILE"
 
-  git pull --rebase origin main 2>&1 | tee -a "$LOG_FILE" || true
+  git pull --rebase origin HEAD 2>&1 | tee -a "$LOG_FILE" || true
 
   # Restore stashed changes if any were stashed
   if echo "$STASH_RESULT" | grep -q "Saved working directory"; then
@@ -46,10 +46,10 @@ while true; do
   SESSION_DURATION=$((SESSION_END - SESSION_START))
 
   # Push any commits the agent made during this session.
-  if ! git push origin main 2>&1 | tee -a "$LOG_FILE"; then
+  if ! git push origin HEAD 2>&1 | tee -a "$LOG_FILE"; then
     echo "[$(date)] Push failed, pulling and retrying..." | tee -a "$LOG_FILE"
-    git pull --rebase origin main 2>&1 | tee -a "$LOG_FILE" || true
-    git push origin main 2>&1 | tee -a "$LOG_FILE" || true
+    git pull --rebase origin HEAD 2>&1 | tee -a "$LOG_FILE" || true
+    git push origin HEAD 2>&1 | tee -a "$LOG_FILE" || true
   fi
 
   if [ "$SESSION_DURATION" -lt 30 ]; then

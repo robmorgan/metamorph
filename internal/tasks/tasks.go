@@ -62,7 +62,7 @@ func ClaimTask(repoDir string, taskName string, agentID int) (bool, error) {
 			_ = os.Remove(lockFile)
 			_, _, _ = git(repoDir, "checkout", "--", lockDir+"/")
 			_, _, _ = git(repoDir, "reset", "--hard", "HEAD~1")
-			_, _, _ = git(repoDir, "pull", "--rebase", "origin", "main")
+			_, _, _ = git(repoDir, "pull", "--rebase", "origin", "HEAD")
 			return false, nil
 		}
 		return false, fmt.Errorf("tasks: failed to push lock file: %w", err)
