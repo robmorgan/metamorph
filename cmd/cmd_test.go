@@ -135,6 +135,18 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 
 func TestInitCreatesAllFiles(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "new-project")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "init")
+	gitExec(t, dir, "config", "user.name", "test")
+	gitExec(t, dir, "config", "user.email", "test@test")
+	// Create a dummy file so we can make an initial commit.
+	if err := os.WriteFile(filepath.Join(dir, ".gitkeep"), []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "initial commit")
 
 	rootCmd.SetArgs([]string{"init", dir})
 	if err := rootCmd.Execute(); err != nil {
@@ -202,12 +214,18 @@ func TestInitPreservesExistingPrompt(t *testing.T) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
+	gitExec(t, dir, "init")
+	gitExec(t, dir, "config", "user.name", "test")
+	gitExec(t, dir, "config", "user.email", "test@test")
 
 	// Write a custom AGENT_PROMPT.md before init.
 	customContent := "# My Custom Prompt\nDo special things.\n"
 	if err := os.WriteFile(filepath.Join(dir, constants.AgentPromptFile), []byte(customContent), 0644); err != nil {
 		t.Fatal(err)
 	}
+
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "initial commit")
 
 	rootCmd.SetArgs([]string{"init", dir})
 	if err := rootCmd.Execute(); err != nil {
@@ -226,6 +244,11 @@ func TestInitPreservesExistingPrompt(t *testing.T) {
 
 func TestInitRejectsExistingProject(t *testing.T) {
 	dir := testProject(t)
+	gitExec(t, dir, "init")
+	gitExec(t, dir, "config", "user.name", "test")
+	gitExec(t, dir, "config", "user.email", "test@test")
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "initial commit")
 
 	rootCmd.SetArgs([]string{"init", dir})
 	err := rootCmd.Execute()

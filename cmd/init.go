@@ -27,9 +27,9 @@ var initCmd = &cobra.Command{
 		}
 		projectName := filepath.Base(absDir)
 
-		// Ensure the target directory exists.
-		if err := os.MkdirAll(absDir, 0755); err != nil {
-			return fmt.Errorf("failed to create directory: %w", err)
+		// Require the directory to already be a git repo.
+		if _, err := os.Stat(filepath.Join(absDir, ".git")); os.IsNotExist(err) {
+			return fmt.Errorf("directory is not a git repository: run 'git init' first")
 		}
 
 		// Check if already initialized.
@@ -118,29 +118,13 @@ Add project-specific instructions for your agents here.
 			fmt.Printf("  Created %s/\n", d)
 		}
 
-		// Write .gitignore before git init so it's included in the initial commit.
+		// Write .gitignore.
 		gitignorePath := filepath.Join(absDir, ".gitignore")
 		gitignoreContent := ".metamorph/\nagent_logs/\n"
 		if err := os.WriteFile(gitignorePath, []byte(gitignoreContent), 0644); err != nil {
 			return fmt.Errorf("failed to write .gitignore: %w", err)
 		}
 		fmt.Println("  Created .gitignore")
-
-		// Ensure the project dir is a git repo (InitUpstream clones from it).
-		if _, err := os.Stat(filepath.Join(absDir, ".git")); os.IsNotExist(err) {
-			if err := runGit(absDir, "init"); err != nil {
-				return fmt.Errorf("failed to init git repo: %w", err)
-			}
-			_ = runGit(absDir, "config", "user.name", "metamorph")
-			_ = runGit(absDir, "config", "user.email", "metamorph@localhost")
-			if err := runGit(absDir, "add", "."); err != nil {
-				return fmt.Errorf("failed to stage files: %w", err)
-			}
-			if err := runGit(absDir, "commit", "-m", "metamorph: initial project setup"); err != nil {
-				return fmt.Errorf("failed to create initial commit: %w", err)
-			}
-			fmt.Println("  Initialized git repo")
-		}
 
 		// Initialize upstream bare repo (clones from user's repo for shared history).
 		if err := gitops.InitUpstream(absDir); err != nil {

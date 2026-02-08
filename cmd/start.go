@@ -83,6 +83,11 @@ func runForegroundStart(cmd *cobra.Command) error {
 		return err
 	}
 
+	// Require the project directory to be a git repo.
+	if _, err := os.Stat(filepath.Join(projectDir, ".git")); os.IsNotExist(err) {
+		return fmt.Errorf("project directory is not a git repository\n\nRun 'metamorph init' to configure the project properly")
+	}
+
 	cfg, err := loadConfig(projectDir)
 	if err != nil {
 		return err
