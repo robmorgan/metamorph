@@ -20,16 +20,7 @@ while true; do
   LOG_FILE="/workspace/logs/session-${SESSION}.log"
   echo "[$(date)] Starting session $SESSION as ${AGENT_ROLE}" | tee -a "$LOG_FILE"
 
-  # Stash any uncommitted changes from the previous session
-  STASH_RESULT=$(git stash --include-untracked 2>&1)
-  echo "$STASH_RESULT" | tee -a "$LOG_FILE"
-
   git pull --rebase origin HEAD 2>&1 | tee -a "$LOG_FILE" || true
-
-  # Restore stashed changes if any were stashed
-  if echo "$STASH_RESULT" | grep -q "Saved working directory"; then
-    git stash pop 2>&1 | tee -a "$LOG_FILE" || true
-  fi
 
   cat /SYSTEM_PROMPT.md /workspace/AGENT_PROMPT.md | envsubst > /tmp/AGENT_PROMPT.md
 
@@ -45,6 +36,13 @@ while true; do
 
   SESSION_END=$(date +%s)
   SESSION_DURATION=$((SESSION_END - SESSION_START))
+
+  # Auto-commit any uncommitted changes left by the agent.
+  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    echo "[$(date)] Auto-committing uncommitted changes from session $SESSION..." | tee -a "$LOG_FILE"
+    git add -A 2>&1 | tee -a "$LOG_FILE"
+    git commit -m "metamorph: auto-commit uncommitted changes from session $SESSION" 2>&1 | tee -a "$LOG_FILE" || true
+  fi
 
   # Push any commits the agent made during this session.
   if ! git push origin HEAD 2>&1 | tee -a "$LOG_FILE"; then

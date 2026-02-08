@@ -68,23 +68,10 @@ var runCmd = &cobra.Command{
 		go func() {
 			defer close(done)
 			for {
-				// Stash any uncommitted changes from the previous session.
-				stashCmd := exec.Command("git", "stash", "--include-untracked")
-				stashCmd.Dir = agentDir
-				stashOut, _ := stashCmd.CombinedOutput()
-				stashedChanges := strings.Contains(string(stashOut), "Saved working directory")
-
 				// Pull latest changes.
 				pullCmd := exec.Command("git", "pull", "--rebase", "origin", "HEAD")
 				pullCmd.Dir = agentDir
 				_ = pullCmd.Run() // best effort
-
-				// Restore stashed changes if any were stashed.
-				if stashedChanges {
-					popCmd := exec.Command("git", "stash", "pop")
-					popCmd.Dir = agentDir
-					_ = popCmd.Run() // best effort
-				}
 
 				// Read the system prompt (embedded) and user prompt (project dir),
 				// then concatenate and expand ${VAR} placeholders.
@@ -129,6 +116,25 @@ var runCmd = &cobra.Command{
 				}
 
 				sessionDuration := time.Since(sessionStart)
+
+				// Auto-commit any uncommitted changes left by the agent.
+				statusCmd := exec.Command("git", "status", "--porcelain")
+				statusCmd.Dir = agentDir
+				statusOut, _ := statusCmd.CombinedOutput()
+				if strings.TrimSpace(string(statusOut)) != "" {
+					slog.Info("auto-committing uncommitted changes from agent session")
+					addCmd := exec.Command("git", "add", "-A")
+					addCmd.Dir = agentDir
+					if err := addCmd.Run(); err != nil {
+						slog.Warn("git add -A failed", "error", err)
+					} else {
+						commitCmd := exec.Command("git", "commit", "-m", "metamorph: auto-commit uncommitted changes")
+						commitCmd.Dir = agentDir
+						if err := commitCmd.Run(); err != nil {
+							slog.Warn("auto-commit failed", "error", err)
+						}
+					}
+				}
 
 				// Push any commits the agent made during this session.
 				pushCmd := exec.Command("git", "push", "origin", "HEAD")
