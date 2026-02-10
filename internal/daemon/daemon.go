@@ -311,7 +311,7 @@ func Run(projectDir string, cfg *config.Config, apiKey, oauthToken string, docke
 
 	// Build image.
 	slog.Info("building docker image")
-	if err := d.docker.BuildImage(projectDir); err != nil {
+	if err := d.docker.BuildImage(projectDir, cfg.Docker.ExtraPackages); err != nil {
 		return fmt.Errorf("daemon: failed to build image: %w", err)
 	}
 

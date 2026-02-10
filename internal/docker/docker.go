@@ -62,7 +62,7 @@ type AgentInfo struct {
 // DockerClient is the interface for Docker operations so the daemon and CLI
 // can be tested without a real Docker daemon.
 type DockerClient interface {
-	BuildImage(projectDir string) error
+	BuildImage(projectDir string, extraPackages []string) error
 	StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 	StopAgent(ctx context.Context, agentID int) error
 	StopAllAgents(ctx context.Context) error
@@ -113,7 +113,7 @@ func newClientWithAPI(projectName string, api dockerAPI) *Client {
 
 // BuildImage writes the embedded Dockerfile and entrypoint into .metamorph/docker/,
 // creates a tar build context, and builds the image.
-func (c *Client) BuildImage(projectDir string) error {
+func (c *Client) BuildImage(projectDir string, extraPackages []string) error {
 	buildDir := filepath.Join(projectDir, constants.DockerDir)
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
 		return fmt.Errorf("docker: failed to create build dir: %w", err)
@@ -137,6 +137,12 @@ func (c *Client) BuildImage(projectDir string) error {
 		return fmt.Errorf("docker: failed to create build context: %w", err)
 	}
 
+	buildArgs := make(map[string]*string)
+	if len(extraPackages) > 0 {
+		pkgs := strings.Join(extraPackages, " ")
+		buildArgs["EXTRA_PACKAGES"] = &pkgs
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
 
@@ -144,6 +150,7 @@ func (c *Client) BuildImage(projectDir string) error {
 		Tags:       []string{defaultImageTag},
 		Dockerfile: "Dockerfile",
 		Remove:     true,
+		BuildArgs:  buildArgs,
 	})
 	if err != nil {
 		return fmt.Errorf("docker: failed to build image: %w", err)
