@@ -3,11 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/robmorgan/metamorph/internal/constants"
-	"github.com/robmorgan/metamorph/internal/gitops"
 	"github.com/spf13/cobra"
 )
 
@@ -126,27 +124,16 @@ Add project-specific instructions for your agents here.
 		}
 		fmt.Println("  Created .gitignore")
 
-		// Initialize upstream bare repo (clones from user's repo for shared history).
-		if err := gitops.InitUpstream(absDir); err != nil {
-			return fmt.Errorf("failed to initialize upstream repo: %w", err)
-		}
-		fmt.Println("  Initialized upstream repo")
-
-		// Update upstream with full content: clone to temp, copy missing files, commit, push.
-		upstreamPath := filepath.Join(absDir, constants.UpstreamDir)
-		if err := syncFilesToUpstream(absDir, upstreamPath); err != nil {
-			return fmt.Errorf("failed to sync files to upstream: %w", err)
-		}
-		fmt.Println("  Synced project files to upstream")
-
 		fmt.Printf("\nProject %q initialized successfully!\n\n", projectName)
 		fmt.Println("Next steps:")
 		fmt.Println("  1. Review and customize metamorph.toml")
 		fmt.Println("  2. Edit AGENT_PROMPT.md with project-specific instructions")
-		fmt.Println("  3. Set credentials (pick one):")
+		fmt.Println("  3. Commit the changes:")
+		fmt.Println("       git add -A && git commit -m \"Initialize metamorph\"")
+		fmt.Println("  4. Set credentials (pick one):")
 		fmt.Println("       export CLAUDE_CODE_OAUTH_TOKEN=...   # Claude Pro/Max subscription")
 		fmt.Println("       export ANTHROPIC_API_KEY=sk-...       # Anthropic API key")
-		fmt.Println("  4. Start agents: metamorph start")
+		fmt.Println("  5. Start agents: metamorph start")
 
 		return nil
 	},
@@ -156,85 +143,3 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 }
 
-// syncFilesToUpstream clones the upstream bare repo to a temp dir, copies project
-// files in (only if they don't already exist), commits, and pushes.
-func syncFilesToUpstream(projectDir, upstreamPath string) error {
-	tmpDir, err := os.MkdirTemp("", "metamorph-sync-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	cloneDir := filepath.Join(tmpDir, "work")
-
-	// Clone.
-	if err := runGit(tmpDir, "clone", upstreamPath, cloneDir); err != nil {
-		return fmt.Errorf("failed to clone upstream: %w", err)
-	}
-
-	// Copy project files into the clone only if they don't already exist.
-	filesToSync := []string{"metamorph.toml", constants.ProgressFile}
-	for _, name := range filesToSync {
-		dst := filepath.Join(cloneDir, name)
-		if _, err := os.Stat(dst); err == nil {
-			continue // already exists in upstream
-		}
-		src := filepath.Join(projectDir, name)
-		data, err := os.ReadFile(src)
-		if err != nil {
-			return fmt.Errorf("failed to read %s: %w", name, err)
-		}
-		if err := os.WriteFile(dst, data, 0644); err != nil {
-			return fmt.Errorf("failed to write %s: %w", name, err)
-		}
-	}
-
-	// Set identity so commits work without a global git config.
-	_ = runGit(cloneDir, "config", "user.name", "metamorph")
-	_ = runGit(cloneDir, "config", "user.email", "metamorph@localhost")
-
-	// Stage and commit only if there are changes.
-	if err := runGit(cloneDir, "add", "."); err != nil {
-		return fmt.Errorf("failed to stage files: %w", err)
-	}
-
-	// Check if there are staged changes before committing.
-	if err := runGit(cloneDir, "diff", "--cached", "--quiet"); err == nil {
-		return nil // nothing to commit
-	}
-
-	if err := runGit(cloneDir, "commit", "-m", "metamorph: sync project files"); err != nil {
-		return fmt.Errorf("failed to commit: %w", err)
-	}
-
-	// Detect branch and push.
-	branch, err := runGitOutput(cloneDir, "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		return fmt.Errorf("failed to detect branch: %w", err)
-	}
-	if err := runGit(cloneDir, "push", "origin", branch); err != nil {
-		return fmt.Errorf("failed to push: %w", err)
-	}
-
-	return nil
-}
-
-// runGit executes a git command in the given directory, discarding output.
-func runGit(dir string, args ...string) error {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	return cmd.Run()
-}
-
-// runGitOutput executes a git command and returns trimmed stdout.
-func runGitOutput(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out[:len(out)-1]), nil // trim trailing newline
-}

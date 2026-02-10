@@ -3,6 +3,7 @@ package gitops
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -207,7 +208,10 @@ func SyncToProjectDir(upstreamPath, projectDir string) (string, error) {
 
 	// Merge FETCH_HEAD.
 	if _, err := git(projectDir, "merge", "FETCH_HEAD", "--no-edit"); err != nil {
-		return "", fmt.Errorf("gitops: merge failed (resolve conflicts manually): %w", err)
+		if _, abortErr := git(projectDir, "merge", "--abort"); abortErr != nil {
+			slog.Warn("gitops: failed to abort merge", "error", abortErr)
+		}
+		return "", fmt.Errorf("gitops: merge failed (will retry on next sync): %w", err)
 	}
 
 	// Get new HEAD.
