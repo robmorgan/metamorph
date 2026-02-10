@@ -674,7 +674,7 @@ func TestSyncToProjectDir(t *testing.T) {
 		}
 	})
 
-	t.Run("aborts merge on conflict", func(t *testing.T) {
+	t.Run("auto-resolves conflict in favor of upstream", func(t *testing.T) {
 		projectDir, upstreamPath := setupUpstream(t)
 
 		// Push a conflicting change via upstream (simulating an agent).
@@ -713,19 +713,19 @@ func TestSyncToProjectDir(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Sync should fail due to merge conflict.
+		// Sync should auto-resolve the conflict in favor of upstream (theirs).
 		_, err := SyncToProjectDir(upstreamPath, projectDir)
-		if err == nil {
-			t.Fatal("expected merge conflict error")
-		}
-		if !strings.Contains(err.Error(), "merge failed") {
-			t.Errorf("expected 'merge failed' in error, got: %v", err)
+		if err != nil {
+			t.Fatalf("expected auto-resolved merge, got error: %v", err)
 		}
 
-		// Verify merge was aborted — MERGE_HEAD should not exist.
-		mergeHead := filepath.Join(projectDir, ".git", "MERGE_HEAD")
-		if _, err := os.Stat(mergeHead); err == nil {
-			t.Error("MERGE_HEAD exists — merge was not aborted")
+		// Verify upstream version won.
+		content, err := os.ReadFile(filepath.Join(projectDir, "conflict.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "agent version\n" {
+			t.Errorf("expected upstream content to win, got: %q", string(content))
 		}
 	})
 }
