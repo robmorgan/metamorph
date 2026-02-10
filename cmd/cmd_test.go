@@ -55,6 +55,10 @@ webhook_url = ""
 		t.Fatal(err)
 	}
 
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(".metamorph/\nagent_logs/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	return dir
 }
 
@@ -169,7 +173,6 @@ func TestInitCreatesAllFiles(t *testing.T) {
 	for _, d := range []string{
 		constants.TaskLockDir,
 		constants.AgentLogDir,
-		constants.UpstreamDir,
 	} {
 		info, err := os.Stat(filepath.Join(dir, d))
 		if err != nil {
@@ -395,6 +398,70 @@ func TestStartDryRun(t *testing.T) {
 	}
 	if !strings.Contains(output, "dry run") {
 		t.Errorf("expected 'dry run' in output, got: %q", output)
+	}
+}
+
+func TestStartRejectsDirtyTree(t *testing.T) {
+	dir := testProjectWithUpstream(t)
+
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	// Create an uncommitted file to make the tree dirty.
+	if err := os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("uncommitted"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
+
+	rootCmd.SetArgs([]string{"start", "--dry-run"})
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for dirty working tree")
+	}
+	if !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Errorf("expected 'uncommitted changes' error, got: %v", err)
+	}
+}
+
+func TestStartCreatesUpstream(t *testing.T) {
+	// Create a project with git but no upstream repo.
+	dir := testProject(t)
+	gitExec(t, dir, "init")
+	gitExec(t, dir, "config", "user.name", "test")
+	gitExec(t, dir, "config", "user.email", "test@test")
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "initial commit")
+
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
+
+	// Verify upstream doesn't exist yet.
+	upstreamPath := filepath.Join(dir, constants.UpstreamDir)
+	if _, err := os.Stat(upstreamPath); err == nil {
+		t.Fatal("upstream should not exist before start")
+	}
+
+	rootCmd.SetArgs([]string{"start", "--dry-run"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("start --dry-run: %v", err)
+	}
+
+	// Verify upstream was created.
+	info, err := os.Stat(upstreamPath)
+	if err != nil {
+		t.Fatalf("upstream should exist after start: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("upstream should be a directory")
 	}
 }
 

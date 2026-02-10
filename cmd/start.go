@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"text/tabwriter"
 
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/daemon"
 	"github.com/robmorgan/metamorph/internal/docker"
+	"github.com/robmorgan/metamorph/internal/gitops"
 	"github.com/spf13/cobra"
 )
 
@@ -101,10 +103,24 @@ func runForegroundStart(cmd *cobra.Command) error {
 		cfg.Git.AuthorEmail = email
 	}
 
-	// Check that the project has been initialized (upstream repo exists).
+	// Require a clean working tree before starting.
+	statusCmd := exec.Command("git", "status", "--porcelain")
+	statusCmd.Dir = projectDir
+	statusOut, err := statusCmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to check git status: %w", err)
+	}
+	if len(statusOut) > 0 {
+		return fmt.Errorf("uncommitted changes detected in project directory\n\nPlease commit your changes first:\n  git add -A && git commit -m \"your message\"")
+	}
+
+	// Create upstream bare repo if it doesn't exist yet (first start after init).
 	upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
 	if _, err := os.Stat(upstreamPath); os.IsNotExist(err) {
-		return fmt.Errorf("project not initialized: %s not found\n\nRun 'metamorph init' first to set up the project", constants.UpstreamDir)
+		fmt.Println("Creating upstream repository...")
+		if err := gitops.InitUpstream(projectDir); err != nil {
+			return fmt.Errorf("failed to initialize upstream repo: %w", err)
+		}
 	}
 
 	// Apply flag overrides to a local copy for display/dry-run purposes.

@@ -673,4 +673,59 @@ func TestSyncToProjectDir(t *testing.T) {
 			t.Errorf("error should have gitops prefix: %v", err)
 		}
 	})
+
+	t.Run("aborts merge on conflict", func(t *testing.T) {
+		projectDir, upstreamPath := setupUpstream(t)
+
+		// Push a conflicting change via upstream (simulating an agent).
+		pusherDir := filepath.Join(t.TempDir(), "agent")
+		if _, err := git(t.TempDir(), "clone", upstreamPath, pusherDir); err != nil {
+			t.Fatalf("clone for agent: %v", err)
+		}
+		if _, err := git(pusherDir, "config", "user.name", "agent-1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "config", "user.email", "agent-1@test"); err != nil {
+			t.Fatal(err)
+		}
+		// Write a file that will conflict.
+		if err := os.WriteFile(filepath.Join(pusherDir, "conflict.txt"), []byte("agent version\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "add", "."); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "commit", "-m", "agent: add conflict.txt"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(pusherDir, "push"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create a conflicting change in the project dir.
+		if err := os.WriteFile(filepath.Join(projectDir, "conflict.txt"), []byte("project version\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(projectDir, "add", "."); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(projectDir, "commit", "-m", "project: add conflict.txt"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Sync should fail due to merge conflict.
+		_, err := SyncToProjectDir(upstreamPath, projectDir)
+		if err == nil {
+			t.Fatal("expected merge conflict error")
+		}
+		if !strings.Contains(err.Error(), "merge failed") {
+			t.Errorf("expected 'merge failed' in error, got: %v", err)
+		}
+
+		// Verify merge was aborted — MERGE_HEAD should not exist.
+		mergeHead := filepath.Join(projectDir, ".git", "MERGE_HEAD")
+		if _, err := os.Stat(mergeHead); err == nil {
+			t.Error("MERGE_HEAD exists — merge was not aborted")
+		}
+	})
 }
