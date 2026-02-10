@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/spf13/cobra"
@@ -116,13 +117,37 @@ Add project-specific instructions for your agents here.
 			fmt.Printf("  Created %s/\n", d)
 		}
 
-		// Write .gitignore.
+		// Append entries to .gitignore (create if missing, never overwrite).
 		gitignorePath := filepath.Join(absDir, ".gitignore")
-		gitignoreContent := ".metamorph/\nagent_logs/\n"
-		if err := os.WriteFile(gitignorePath, []byte(gitignoreContent), 0644); err != nil {
-			return fmt.Errorf("failed to write .gitignore: %w", err)
+		requiredEntries := []string{".metamorph/", "agent_logs/"}
+		existing, _ := os.ReadFile(gitignorePath)
+		existingStr := string(existing)
+		var toAdd []string
+		for _, entry := range requiredEntries {
+			if !strings.Contains(existingStr, entry) {
+				toAdd = append(toAdd, entry)
+			}
 		}
-		fmt.Println("  Created .gitignore")
+		if len(toAdd) > 0 {
+			f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				return fmt.Errorf("failed to open .gitignore: %w", err)
+			}
+			// Add a newline before appending if the file doesn't end with one.
+			if len(existingStr) > 0 && !strings.HasSuffix(existingStr, "\n") {
+				_, _ = f.WriteString("\n")
+			}
+			for _, entry := range toAdd {
+				if _, err := f.WriteString(entry + "\n"); err != nil {
+					_ = f.Close()
+					return fmt.Errorf("failed to write .gitignore entry: %w", err)
+				}
+			}
+			_ = f.Close()
+			fmt.Println("  Updated .gitignore")
+		} else {
+			fmt.Println("  .gitignore already up to date")
+		}
 
 		fmt.Printf("\nProject %q initialized successfully!\n\n", projectName)
 		fmt.Println("Next steps:")
