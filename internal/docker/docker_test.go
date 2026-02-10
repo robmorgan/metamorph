@@ -51,10 +51,11 @@ type mockDocker struct {
 	logsErr     error
 
 	// Track calls for assertions.
-	created []mockCreateCall
-	started []string
-	stopped []string
-	removed []string
+	buildOptions types.ImageBuildOptions
+	created      []mockCreateCall
+	started      []string
+	stopped      []string
+	removed      []string
 }
 
 type mockCreateCall struct {
@@ -68,6 +69,7 @@ func (m *mockDocker) Ping(ctx context.Context) (types.Ping, error) {
 }
 
 func (m *mockDocker) ImageBuild(ctx context.Context, buildContext io.Reader, options types.ImageBuildOptions) (types.ImageBuildResponse, error) {
+	m.buildOptions = options
 	if m.buildErr != nil {
 		return types.ImageBuildResponse{}, m.buildErr
 	}
@@ -121,7 +123,7 @@ func TestBuildImage(t *testing.T) {
 		mock := &mockDocker{buildBody: `{"stream":"Successfully built abc123"}`}
 		c := newClientWithAPI("test-project", mock)
 
-		if err := c.BuildImage(projectDir); err != nil {
+		if err := c.BuildImage(projectDir, nil); err != nil {
 			t.Fatalf("BuildImage: %v", err)
 		}
 
@@ -145,12 +147,46 @@ func TestBuildImage(t *testing.T) {
 		mock := &mockDocker{buildErr: fmt.Errorf("build failed")}
 		c := newClientWithAPI("test-project", mock)
 
-		err := c.BuildImage(projectDir)
+		err := c.BuildImage(projectDir, nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
 		if !strings.Contains(err.Error(), "failed to build image") {
 			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("passes extra packages as build arg", func(t *testing.T) {
+		projectDir := t.TempDir()
+
+		mock := &mockDocker{buildBody: `{"stream":"Successfully built abc123"}`}
+		c := newClientWithAPI("test-project", mock)
+
+		if err := c.BuildImage(projectDir, []string{"vim", "htop"}); err != nil {
+			t.Fatalf("BuildImage: %v", err)
+		}
+
+		got, ok := mock.buildOptions.BuildArgs["EXTRA_PACKAGES"]
+		if !ok || got == nil {
+			t.Fatal("expected EXTRA_PACKAGES build arg to be set")
+		}
+		if *got != "vim htop" {
+			t.Errorf("EXTRA_PACKAGES = %q, want %q", *got, "vim htop")
+		}
+	})
+
+	t.Run("omits build arg when no extra packages", func(t *testing.T) {
+		projectDir := t.TempDir()
+
+		mock := &mockDocker{buildBody: `{"stream":"Successfully built abc123"}`}
+		c := newClientWithAPI("test-project", mock)
+
+		if err := c.BuildImage(projectDir, nil); err != nil {
+			t.Fatalf("BuildImage: %v", err)
+		}
+
+		if _, ok := mock.buildOptions.BuildArgs["EXTRA_PACKAGES"]; ok {
+			t.Error("EXTRA_PACKAGES build arg should not be set when no extra packages")
 		}
 	})
 }
@@ -716,7 +752,7 @@ func TestDockerClientInterface(t *testing.T) {
 // mockDockerClient is a full mock of the DockerClient interface for consumers.
 type mockDockerClient struct{}
 
-func (m *mockDockerClient) BuildImage(projectDir string) error { return nil }
+func (m *mockDockerClient) BuildImage(projectDir string, extraPackages []string) error { return nil }
 func (m *mockDockerClient) StartAgent(ctx context.Context, opts AgentOpts) (string, error) {
 	return "mock-id", nil
 }

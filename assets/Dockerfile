@@ -19,6 +19,12 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+ARG EXTRA_PACKAGES=""
+RUN if [ -n "$EXTRA_PACKAGES" ]; then \
+    apt-get update && apt-get install -y $EXTRA_PACKAGES \
+    && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 RUN npm install -g @anthropic-ai/claude-code
 
 RUN userdel -r ubuntu 2>/dev/null; useradd -m -s /bin/bash -u 1000 agent

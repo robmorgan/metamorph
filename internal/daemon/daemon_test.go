@@ -32,7 +32,7 @@ type mockDockerClient struct {
 	logsErr     error
 }
 
-func (m *mockDockerClient) BuildImage(projectDir string) error {
+func (m *mockDockerClient) BuildImage(projectDir string, extraPackages []string) error {
 	return m.buildErr
 }
 
