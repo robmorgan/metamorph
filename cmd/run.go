@@ -143,7 +143,15 @@ var runCmd = &cobra.Command{
 					slog.Warn("push failed, pulling and retrying", "error", err)
 					retryPull := exec.Command("git", "pull", "--rebase", "origin", "HEAD")
 					retryPull.Dir = agentDir
-					_ = retryPull.Run()
+					if err := retryPull.Run(); err != nil {
+						slog.Warn("rebase conflict, aborting and falling back to merge", "error", err)
+						abortCmd := exec.Command("git", "rebase", "--abort")
+						abortCmd.Dir = agentDir
+						_ = abortCmd.Run()
+						mergePull := exec.Command("git", "pull", "--no-rebase", "-X", "theirs", "origin", "HEAD")
+						mergePull.Dir = agentDir
+						_ = mergePull.Run()
+					}
 					retryPush := exec.Command("git", "push", "origin", "HEAD")
 					retryPush.Dir = agentDir
 					_ = retryPush.Run()

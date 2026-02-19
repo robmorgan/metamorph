@@ -48,7 +48,11 @@ while true; do
   # Push any commits the agent made during this session.
   if ! git push origin HEAD 2>&1 | tee -a "$LOG_FILE"; then
     echo "[$(date)] Push failed, pulling and retrying..." | tee -a "$LOG_FILE"
-    git pull --rebase origin HEAD 2>&1 | tee -a "$LOG_FILE" || true
+    if ! git pull --rebase origin HEAD 2>&1 | tee -a "$LOG_FILE"; then
+      echo "[$(date)] Rebase conflict, aborting rebase and falling back to merge..." | tee -a "$LOG_FILE"
+      git rebase --abort 2>&1 | tee -a "$LOG_FILE" || true
+      git pull --no-rebase -X theirs origin HEAD 2>&1 | tee -a "$LOG_FILE" || true
+    fi
     git push origin HEAD 2>&1 | tee -a "$LOG_FILE" || true
   fi
 

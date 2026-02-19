@@ -206,7 +206,9 @@ func SyncToProjectDir(upstreamPath, projectDir string) (string, error) {
 		return "", fmt.Errorf("gitops: fetch failed: %w", err)
 	}
 
-	// Merge FETCH_HEAD, auto-resolving conflicts in favor of upstream (agent work).
+	// Merge FETCH_HEAD, preferring upstream (agent) changes on conflict.
+	// Agents work on top of the user's project, so their version is always
+	// the most up-to-date for any file they touched.
 	if _, err := git(projectDir, "merge", "-X", "theirs", "FETCH_HEAD", "--no-edit"); err != nil {
 		if _, abortErr := git(projectDir, "merge", "--abort"); abortErr != nil {
 			slog.Warn("gitops: failed to abort merge", "error", abortErr)
