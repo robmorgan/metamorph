@@ -50,7 +50,7 @@ var promptCmd = &cobra.Command{
 		data, err := os.ReadFile(promptPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return fmt.Errorf("AGENT_PROMPT.md not found (run 'metamorph init' first)")
+				return fmt.Errorf("AGENT_PROMPT.md not found (run 'metamorph project create' first)")
 			}
 			return fmt.Errorf("failed to read AGENT_PROMPT.md: %w", err)
 		}

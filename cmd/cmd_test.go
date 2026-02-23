@@ -188,7 +188,7 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func TestInitCreatesAllFiles(t *testing.T) {
+func TestProjectCreateCreatesAllFiles(t *testing.T) {
 	home := setupTestHome(t)
 	dir := filepath.Join(t.TempDir(), "new-project")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -203,9 +203,9 @@ func TestInitCreatesAllFiles(t *testing.T) {
 	gitExec(t, dir, "add", ".")
 	gitExec(t, dir, "commit", "-m", "initial commit")
 
-	rootCmd.SetArgs([]string{"init", dir})
+	rootCmd.SetArgs([]string{"project", "create", dir})
 	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("init: %v", err)
+		t.Fatalf("project create: %v", err)
 	}
 
 	projectName := filepath.Base(dir)
@@ -277,7 +277,7 @@ func TestInitCreatesAllFiles(t *testing.T) {
 	}
 }
 
-func TestInitPreservesExistingPrompt(t *testing.T) {
+func TestProjectCreatePreservesExistingPrompt(t *testing.T) {
 	setupTestHome(t)
 	dir := filepath.Join(t.TempDir(), "existing-project")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -287,7 +287,7 @@ func TestInitPreservesExistingPrompt(t *testing.T) {
 	gitExec(t, dir, "config", "user.name", "test")
 	gitExec(t, dir, "config", "user.email", "test@test")
 
-	// Write a custom AGENT_PROMPT.md before init.
+	// Write a custom AGENT_PROMPT.md before project create.
 	customContent := "# My Custom Prompt\nDo special things.\n"
 	if err := os.WriteFile(filepath.Join(dir, constants.AgentPromptFile), []byte(customContent), 0644); err != nil {
 		t.Fatal(err)
@@ -296,9 +296,9 @@ func TestInitPreservesExistingPrompt(t *testing.T) {
 	gitExec(t, dir, "add", ".")
 	gitExec(t, dir, "commit", "-m", "initial commit")
 
-	rootCmd.SetArgs([]string{"init", dir})
+	rootCmd.SetArgs([]string{"project", "create", dir})
 	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("init: %v", err)
+		t.Fatalf("project create: %v", err)
 	}
 
 	// Verify custom content was preserved.
@@ -311,7 +311,7 @@ func TestInitPreservesExistingPrompt(t *testing.T) {
 	}
 }
 
-func TestInitRejectsExistingProject(t *testing.T) {
+func TestProjectCreateRejectsExistingProject(t *testing.T) {
 	home := setupTestHome(t)
 	dir := filepath.Join(t.TempDir(), "dup-project")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -336,13 +336,237 @@ func TestInitRejectsExistingProject(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rootCmd.SetArgs([]string{"init", dir})
+	rootCmd.SetArgs([]string{"project", "create", dir})
 	err := rootCmd.Execute()
 	if err == nil {
 		t.Fatal("expected error for existing project")
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestProjectListEmpty(t *testing.T) {
+	home := setupTestHome(t)
+
+	// Create an empty DB.
+	dbPath := filepath.Join(home, constants.GlobalDirName, constants.ControlPlaneDBFile)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := controlplane.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	// Capture stdout.
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	rootCmd.SetArgs([]string{"project", "list"})
+	err = rootCmd.Execute()
+
+	_ = w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	output := buf.String()
+
+	if err != nil {
+		t.Fatalf("project list: %v", err)
+	}
+	if !strings.Contains(output, "No projects registered") {
+		t.Errorf("expected 'No projects registered' message, got: %q", output)
+	}
+}
+
+func TestProjectListShowsProjects(t *testing.T) {
+	home := setupTestHome(t)
+
+	// Register a project in the DB.
+	dbPath := filepath.Join(home, constants.GlobalDirName, constants.ControlPlaneDBFile)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := controlplane.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.RegisterProject(ctx, "my-project"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddProjectRepo(ctx, "my-project", "/tmp/repo", "repo"); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	// Capture stdout.
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	rootCmd.SetArgs([]string{"project", "list"})
+	err = rootCmd.Execute()
+
+	_ = w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	output := buf.String()
+
+	if err != nil {
+		t.Fatalf("project list: %v", err)
+	}
+	if !strings.Contains(output, "NAME") {
+		t.Errorf("expected column headers, got: %q", output)
+	}
+	if !strings.Contains(output, "my-project") {
+		t.Errorf("expected project name in output, got: %q", output)
+	}
+}
+
+func TestProjectDeleteRemovesProject(t *testing.T) {
+	home := setupTestHome(t)
+
+	// Create a project dir and register in DB.
+	projectName := "del-project"
+	projectDir := filepath.Join(home, constants.GlobalDirName, constants.ProjectsDir, projectName)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, constants.ProjectConfigFile), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	dbPath := filepath.Join(home, constants.GlobalDirName, constants.ControlPlaneDBFile)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := controlplane.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.RegisterProject(ctx, projectName); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	rootCmd.SetArgs([]string{"project", "delete", projectName})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("project delete: %v", err)
+	}
+
+	// Verify project dir is removed.
+	if _, err := os.Stat(projectDir); !os.IsNotExist(err) {
+		t.Error("expected project directory to be removed")
+	}
+
+	// Verify project is removed from DB.
+	store, err = controlplane.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	_, err = store.GetProject(ctx, projectName)
+	if err == nil {
+		t.Error("expected project to be removed from DB")
+	}
+}
+
+func TestProjectDeleteRefusesRunning(t *testing.T) {
+	home := setupTestHome(t)
+
+	projectName := "running-project"
+	dbPath := filepath.Join(home, constants.GlobalDirName, constants.ControlPlaneDBFile)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := controlplane.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.RegisterProject(ctx, projectName); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateProjectStatus(ctx, projectName, "running"); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	rootCmd.SetArgs([]string{"project", "delete", projectName})
+	err = rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for running project")
+	}
+	if !strings.Contains(err.Error(), "running") {
+		t.Errorf("expected 'running' in error, got: %v", err)
+	}
+}
+
+func TestProjectDeleteForceRunning(t *testing.T) {
+	home := setupTestHome(t)
+
+	projectName := "force-project"
+	projectDir := filepath.Join(home, constants.GlobalDirName, constants.ProjectsDir, projectName)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	dbPath := filepath.Join(home, constants.GlobalDirName, constants.ControlPlaneDBFile)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := controlplane.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.RegisterProject(ctx, projectName); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateProjectStatus(ctx, projectName, "running"); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	rootCmd.SetArgs([]string{"project", "delete", "--force", projectName})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("project delete --force: %v", err)
+	}
+
+	// Verify project dir is removed.
+	if _, err := os.Stat(projectDir); !os.IsNotExist(err) {
+		t.Error("expected project directory to be removed")
+	}
+}
+
+func TestProjectDeleteNotFound(t *testing.T) {
+	home := setupTestHome(t)
+
+	dbPath := filepath.Join(home, constants.GlobalDirName, constants.ControlPlaneDBFile)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := controlplane.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	rootCmd.SetArgs([]string{"project", "delete", "nonexistent"})
+	err = rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for nonexistent project")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' in error, got: %v", err)
 	}
 }
 

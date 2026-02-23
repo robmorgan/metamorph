@@ -221,7 +221,7 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 		return "", fmt.Errorf("docker: failed to resolve agent prompt path: %w", err)
 	}
 	if _, err := os.Stat(agentPromptAbs); os.IsNotExist(err) {
-		return "", fmt.Errorf("docker: %s not found in project directory (run 'metamorph init' first)", constants.AgentPromptFile)
+		return "", fmt.Errorf("docker: %s not found in project directory (run 'metamorph project create' first)", constants.AgentPromptFile)
 	}
 
 	logDirSource := opts.LogDir

@@ -66,13 +66,13 @@ func resolveProject(cmd *cobra.Command) (string, *config.Config, error) {
 	dbPath := constants.ControlPlaneDBPath()
 	store, err := controlplane.NewSQLiteStore(dbPath)
 	if err != nil {
-		return "", nil, fmt.Errorf("metamorph not initialized (run 'metamorph init' first)")
+		return "", nil, fmt.Errorf("metamorph not initialized (run 'metamorph project create' first)")
 	}
 	defer store.Close()
 
 	name, err := store.GetProjectByRepoPath(context.Background(), repoRoot)
 	if err != nil {
-		return "", nil, fmt.Errorf("not a registered project. Run 'metamorph init' first.")
+		return "", nil, fmt.Errorf("not a registered project. Run 'metamorph project create' first.")
 	}
 
 	// 4. Load config.
@@ -98,13 +98,13 @@ func resolveProjectName(cmd *cobra.Command) (string, error) {
 	dbPath := constants.ControlPlaneDBPath()
 	store, err := controlplane.NewSQLiteStore(dbPath)
 	if err != nil {
-		return "", fmt.Errorf("metamorph not initialized (run 'metamorph init' first)")
+		return "", fmt.Errorf("metamorph not initialized (run 'metamorph project create' first)")
 	}
 	defer store.Close()
 
 	name, err := store.GetProjectByRepoPath(context.Background(), repoRoot)
 	if err != nil {
-		return "", fmt.Errorf("not a registered project. Run 'metamorph init' first.")
+		return "", fmt.Errorf("not a registered project. Run 'metamorph project create' first.")
 	}
 
 	return name, nil
