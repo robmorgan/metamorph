@@ -459,106 +459,18 @@ func TestPromptShow(t *testing.T) {
 	}
 }
 
-func TestStartDryRun(t *testing.T) {
-	dir := testProjectWithUpstream(t)
+func TestStartRequiresCredentials(t *testing.T) {
+	// Unset credentials so start fails with a clear error.
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
 
-	oldWd, _ := os.Getwd()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.Chdir(oldWd) }()
-
-	t.Setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
-
-	// Capture stdout.
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	rootCmd.SetArgs([]string{"start", "--dry-run"})
-	err := rootCmd.Execute()
-
-	_ = w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-	output := buf.String()
-
-	if err != nil {
-		t.Fatalf("start --dry-run: %v", err)
-	}
-
-	if !strings.Contains(output, "test-proj") {
-		t.Errorf("expected project name in output, got: %q", output)
-	}
-	if !strings.Contains(output, "dry run") {
-		t.Errorf("expected 'dry run' in output, got: %q", output)
-	}
-}
-
-func TestStartRejectsDirtyTree(t *testing.T) {
-	dir := testProjectWithUpstream(t)
-
-	oldWd, _ := os.Getwd()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.Chdir(oldWd) }()
-
-	// Create an uncommitted file to make the tree dirty.
-	if err := os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("uncommitted"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
-
-	rootCmd.SetArgs([]string{"start", "--dry-run"})
+	rootCmd.SetArgs([]string{"start"})
 	err := rootCmd.Execute()
 	if err == nil {
-		t.Fatal("expected error for dirty working tree")
+		t.Fatal("expected error when no credentials are set")
 	}
-	if !strings.Contains(err.Error(), "uncommitted changes") {
-		t.Errorf("expected 'uncommitted changes' error, got: %v", err)
-	}
-}
-
-func TestStartCreatesUpstream(t *testing.T) {
-	// Create a project with git but no upstream repo.
-	dir := testProject(t)
-	gitExec(t, dir, "init")
-	gitExec(t, dir, "config", "user.name", "test")
-	gitExec(t, dir, "config", "user.email", "test@test")
-	gitExec(t, dir, "add", ".")
-	gitExec(t, dir, "commit", "-m", "initial commit")
-
-	oldWd, _ := os.Getwd()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.Chdir(oldWd) }()
-
-	t.Setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
-
-	// Verify upstream doesn't exist yet (use dir basename as label since label is empty).
-	repoLabel := filepath.Base(dir)
-	upstreamPath := constants.UpstreamRepoPath("test-proj", repoLabel)
-	if _, err := os.Stat(upstreamPath); err == nil {
-		t.Fatal("upstream should not exist before start")
-	}
-
-	rootCmd.SetArgs([]string{"start", "--dry-run"})
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("start --dry-run: %v", err)
-	}
-
-	// Verify upstream was created.
-	info, err := os.Stat(upstreamPath)
-	if err != nil {
-		t.Fatalf("upstream should exist after start: %v", err)
-	}
-	if !info.IsDir() {
-		t.Error("upstream should be a directory")
+	if !strings.Contains(err.Error(), "no credentials found") {
+		t.Errorf("expected 'no credentials found' error, got: %v", err)
 	}
 }
 

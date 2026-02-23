@@ -80,7 +80,7 @@ type Daemon struct {
 }
 
 // Start launches the daemon as a background subprocess. It re-execs the
-// current binary with "daemon start --daemon-mode" and waits for heartbeat.
+// current binary with "start --daemon-mode" and waits for heartbeat.
 func Start(apiKey, oauthToken string) error {
 	globalDir := constants.GlobalDir()
 	pidPath := filepath.Join(globalDir, constants.DaemonPIDFile)
@@ -94,7 +94,7 @@ func Start(apiKey, oauthToken string) error {
 		return fmt.Errorf("daemon: failed to find executable: %w", err)
 	}
 
-	args := []string{"daemon", "start", "--daemon-mode"}
+	args := []string{"start", "--daemon-mode"}
 	if apiKey != "" {
 		args = append(args, "--api-key", apiKey)
 	}
