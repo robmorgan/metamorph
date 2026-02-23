@@ -97,6 +97,8 @@ func migrate(db *sql.DB) error {
 	// Run additive migrations for existing databases.
 	addColumnIfMissing(db, "tasks", "project", "TEXT DEFAULT ''")
 	addColumnIfMissing(db, "messages", "project", "TEXT DEFAULT ''")
+	addColumnIfMissing(db, "tasks", "repo", "TEXT DEFAULT ''")
+	addColumnIfMissing(db, "tasks", "branch", "TEXT DEFAULT ''")
 
 	return nil
 }
@@ -225,10 +227,42 @@ func (s *SQLiteStore) GetProjectByRepoPath(ctx context.Context, repoPath string)
 
 // --- Task Operations ---
 
+// ListProjectRepos returns all repos associated with a project.
+func (s *SQLiteStore) ListProjectRepos(ctx context.Context, project string) ([]ProjectRepo, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, project, path, label, created_at FROM project_repos WHERE project = ? ORDER BY id`, project)
+	if err != nil {
+		return nil, fmt.Errorf("broker: list project repos: %w", err)
+	}
+	defer rows.Close()
+
+	var repos []ProjectRepo
+	for rows.Next() {
+		var r ProjectRepo
+		if err := rows.Scan(&r.ID, &r.Project, &r.Path, &r.Label, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("broker: scan project repo: %w", err)
+		}
+		repos = append(repos, r)
+	}
+	return repos, rows.Err()
+}
+
+// CountTasksByProject returns the number of tasks for a project.
+func (s *SQLiteStore) CountTasksByProject(ctx context.Context, project string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE project = ?`, project).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("broker: count tasks: %w", err)
+	}
+	return count, nil
+}
+
 // ListTasks returns tasks matching the filter, ordered by priority then creation time.
 func (s *SQLiteStore) ListTasks(ctx context.Context, filter TaskFilter) ([]Task, error) {
 	query := `SELECT id, title, description, status, priority, assignee,
-	                  role_affinity, project, claimed_at, created_at, completed_at,
+	                  role_affinity, project, repo, branch,
+	                  claimed_at, created_at, completed_at,
 	                  depends_on, notes
 	           FROM tasks WHERE 1=1`
 	var args []interface{}
@@ -273,7 +307,8 @@ func (s *SQLiteStore) ListTasks(ctx context.Context, filter TaskFilter) ([]Task,
 func (s *SQLiteStore) GetTask(ctx context.Context, taskID string) (*Task, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, title, description, status, priority, assignee,
-		        role_affinity, project, claimed_at, created_at, completed_at,
+		        role_affinity, project, repo, branch,
+		        claimed_at, created_at, completed_at,
 		        depends_on, notes
 		 FROM tasks WHERE id = ?`, taskID)
 
@@ -307,10 +342,10 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, t Task) error {
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO tasks (id, title, description, status, priority, assignee,
-		                    role_affinity, project, created_at, depends_on, notes)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                    role_affinity, project, repo, branch, created_at, depends_on, notes)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.Title, t.Description, t.Status, t.Priority, nil,
-		t.RoleAffinity, project, t.CreatedAt, deps, t.Notes)
+		t.RoleAffinity, project, t.Repo, t.Branch, t.CreatedAt, deps, t.Notes)
 	if err != nil {
 		return fmt.Errorf("broker: create task: %w", err)
 	}
@@ -497,10 +532,11 @@ func scanTask(rows *sql.Rows) (Task, error) {
 	var assignee sql.NullInt64
 	var claimedAt, completedAt sql.NullTime
 	var deps, roleAffinity string
-	var project sql.NullString
+	var project, repo, branch sql.NullString
 
 	err := rows.Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority,
-		&assignee, &roleAffinity, &project, &claimedAt, &t.CreatedAt, &completedAt,
+		&assignee, &roleAffinity, &project, &repo, &branch,
+		&claimedAt, &t.CreatedAt, &completedAt,
 		&deps, &t.Notes)
 	if err != nil {
 		return Task{}, fmt.Errorf("broker: scan task: %w", err)
@@ -509,6 +545,12 @@ func scanTask(rows *sql.Rows) (Task, error) {
 	t.RoleAffinity = roleAffinity
 	if project.Valid {
 		t.Project = project.String
+	}
+	if repo.Valid {
+		t.Repo = repo.String
+	}
+	if branch.Valid {
+		t.Branch = branch.String
 	}
 	if assignee.Valid {
 		v := int(assignee.Int64)
@@ -533,10 +575,11 @@ func scanTaskRow(row *sql.Row) (Task, error) {
 	var assignee sql.NullInt64
 	var claimedAt, completedAt sql.NullTime
 	var deps, roleAffinity string
-	var project sql.NullString
+	var project, repo, branch sql.NullString
 
 	err := row.Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority,
-		&assignee, &roleAffinity, &project, &claimedAt, &t.CreatedAt, &completedAt,
+		&assignee, &roleAffinity, &project, &repo, &branch,
+		&claimedAt, &t.CreatedAt, &completedAt,
 		&deps, &t.Notes)
 	if err != nil {
 		return Task{}, err
@@ -545,6 +588,12 @@ func scanTaskRow(row *sql.Row) (Task, error) {
 	t.RoleAffinity = roleAffinity
 	if project.Valid {
 		t.Project = project.String
+	}
+	if repo.Valid {
+		t.Repo = repo.String
+	}
+	if branch.Valid {
+		t.Branch = branch.String
 	}
 	if assignee.Valid {
 		v := int(assignee.Int64)

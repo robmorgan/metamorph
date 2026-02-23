@@ -15,11 +15,24 @@ type Task struct {
 	Assignee     *int       `json:"assignee"`       // agent ID
 	RoleAffinity string     `json:"role_affinity,omitempty"`
 	Project      string     `json:"project"`        // project name
+	Repo         string     `json:"repo,omitempty"`
+	Branch       string     `json:"branch,omitempty"`
 	ClaimedAt    *time.Time `json:"claimed_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	CompletedAt  *time.Time `json:"completed_at,omitempty"`
 	DependsOn    []string   `json:"depends_on,omitempty"`
 	Notes        string     `json:"notes,omitempty"`
+}
+
+// ProjectDetail is the enriched project response returned by the API.
+type ProjectDetail struct {
+	Name        string        `json:"name"`
+	Description string        `json:"description"`
+	Status      string        `json:"status"`
+	Repos       []ProjectRepo `json:"repos"`
+	TaskCount   int           `json:"task_count"`
+	AgentCount  int           `json:"agent_count"`
+	CreatedAt   time.Time     `json:"created_at"`
 }
 
 // TaskFilter controls which tasks are returned by ListTasks.
@@ -90,6 +103,8 @@ type Store interface {
 	UpdateProjectStatus(ctx context.Context, name, status string) error
 	AddProjectRepo(ctx context.Context, project, path, label string) error
 	GetProjectByRepoPath(ctx context.Context, repoPath string) (string, error)
+	ListProjectRepos(ctx context.Context, project string) ([]ProjectRepo, error)
+	CountTasksByProject(ctx context.Context, project string) (int, error)
 
 	// Lifecycle.
 	Close() error

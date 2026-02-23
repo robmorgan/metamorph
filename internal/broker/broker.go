@@ -14,9 +14,16 @@ import (
 
 // Broker is the HTTP task broker that agents interact with.
 type Broker struct {
-	store  Store
-	mu     sync.Mutex
-	server *http.Server
+	store         Store
+	mu            sync.Mutex
+	server        *http.Server
+	extraHandlers []extraHandler
+	configReader  func(name string) string // returns project description
+}
+
+type extraHandler struct {
+	pattern string
+	handler http.HandlerFunc
 }
 
 // New creates a Broker backed by the given Store.
@@ -62,12 +69,23 @@ func (b *Broker) Handler() http.Handler {
 	return b.buildMux()
 }
 
+// RegisterHandler adds an extra HTTP handler to the broker's mux.
+// Must be called before Start.
+func (b *Broker) RegisterHandler(pattern string, handler http.HandlerFunc) {
+	b.extraHandlers = append(b.extraHandlers, extraHandler{pattern, handler})
+}
+
+// SetConfigReader sets a function that returns a project description by name.
+func (b *Broker) SetConfigReader(fn func(name string) string) {
+	b.configReader = fn
+}
+
 // Store returns the underlying Store for direct access (e.g. project resolution).
 func (b *Broker) Store() Store {
 	return b.store
 }
 
-func (b *Broker) buildMux() *http.ServeMux {
+func (b *Broker) buildMux() http.Handler {
 	mux := http.NewServeMux()
 
 	// Task endpoints.
@@ -94,7 +112,28 @@ func (b *Broker) buildMux() *http.ServeMux {
 
 	mux.HandleFunc("GET /health", b.handleHealth)
 
-	return mux
+	// Extra handlers registered by the daemon.
+	for _, h := range b.extraHandlers {
+		mux.HandleFunc(h.pattern, h.handler)
+	}
+
+	return corsMiddleware(mux)
+}
+
+// corsMiddleware wraps an http.Handler with CORS headers.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // --- Task Handlers ---
@@ -149,6 +188,8 @@ type createTaskRequest struct {
 	Priority     int      `json:"priority"`
 	RoleAffinity string   `json:"role_affinity"`
 	Project      string   `json:"project"`
+	Repo         string   `json:"repo"`
+	Branch       string   `json:"branch"`
 	DependsOn    []string `json:"depends_on"`
 }
 
@@ -176,6 +217,8 @@ func (b *Broker) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		Priority:     req.Priority,
 		RoleAffinity: req.RoleAffinity,
 		Project:      req.Project,
+		Repo:         req.Repo,
+		Branch:       req.Branch,
 		DependsOn:    req.DependsOn,
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -385,10 +428,12 @@ func (b *Broker) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if projects == nil {
-		projects = []ProjectInfo{}
+
+	details := make([]ProjectDetail, 0, len(projects))
+	for _, p := range projects {
+		details = append(details, b.enrichProject(r.Context(), p))
 	}
-	writeJSON(w, http.StatusOK, projects)
+	writeJSON(w, http.StatusOK, details)
 }
 
 type registerProjectRequest struct {
@@ -438,7 +483,7 @@ func (b *Broker) handleGetProject(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, project)
+	writeJSON(w, http.StatusOK, b.enrichProject(r.Context(), *project))
 }
 
 func (b *Broker) handleUnregisterProject(w http.ResponseWriter, r *http.Request) {
@@ -507,6 +552,33 @@ func (b *Broker) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, project)
+}
+
+// enrichProject builds a ProjectDetail from a ProjectInfo by querying repos, task counts,
+// and reading project description from config.
+func (b *Broker) enrichProject(ctx context.Context, p ProjectInfo) ProjectDetail {
+	detail := ProjectDetail{
+		Name:      p.Name,
+		Status:    p.Status,
+		CreatedAt: p.CreatedAt,
+	}
+
+	b.mu.Lock()
+	repos, _ := b.store.ListProjectRepos(ctx, p.Name)
+	taskCount, _ := b.store.CountTasksByProject(ctx, p.Name)
+	b.mu.Unlock()
+
+	if repos == nil {
+		repos = []ProjectRepo{}
+	}
+	detail.Repos = repos
+	detail.TaskCount = taskCount
+
+	if b.configReader != nil {
+		detail.Description = b.configReader(p.Name)
+	}
+
+	return detail
 }
 
 // --- Helpers ---

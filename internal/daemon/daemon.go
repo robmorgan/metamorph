@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -300,6 +301,19 @@ func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string, dockerClient
 	defer store.Close()
 
 	d.broker = broker.New(store)
+
+	// Set config reader so project endpoints can return descriptions.
+	d.broker.SetConfigReader(func(name string) string {
+		cfg, err := config.LoadProject(name)
+		if err != nil {
+			return ""
+		}
+		return cfg.Project.Description
+	})
+
+	// Register daemon-specific endpoints on the broker.
+	d.broker.RegisterHandler("GET /projects/{name}/state", d.handleProjectState)
+
 	brokerAddr := fmt.Sprintf(":%d", globalCfg.Daemon.Port)
 	if err := d.broker.Start(brokerAddr); err != nil {
 		return fmt.Errorf("daemon: failed to start broker: %w", err)
@@ -689,6 +703,22 @@ func (d *Daemon) shutdown(ctx context.Context) error {
 	_ = os.Remove(pidPath)
 
 	return nil
+}
+
+// handleProjectState serves GET /projects/{name}/state with daemon agent state.
+func (d *Daemon) handleProjectState(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	state, err := GetStatus(name)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(state)
 }
 
 // writeStateToPath writes state to a specific path atomically.
