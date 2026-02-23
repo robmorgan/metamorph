@@ -19,7 +19,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/robmorgan/metamorph/internal/broker"
+	"github.com/robmorgan/metamorph/internal/controlplane"
+	"github.com/robmorgan/metamorph/web"
 	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/docker"
@@ -73,14 +74,14 @@ type Daemon struct {
 	apiKey     string
 	oauthToken string
 	docker     docker.DockerClient // lazily initialized
-	broker     *broker.Broker
+	cp         *controlplane.ControlPlane
 	projects   map[string]*ProjectInstance
 	mu         sync.Mutex
 	startedAt  time.Time
 }
 
 // Start launches the daemon as a background subprocess. It re-execs the
-// current binary with "start --daemon-mode" and waits for the broker's
+// current binary with "start --daemon-mode" and waits for the control plane's
 // HTTP health endpoint to become reachable.
 func Start(apiKey, oauthToken string) error {
 	globalDir := constants.GlobalDir()
@@ -138,7 +139,7 @@ func Start(apiKey, oauthToken string) error {
 	childPID := cmd.Process.Pid
 	_ = cmd.Process.Release()
 
-	// Wait for the broker's HTTP health endpoint to become reachable.
+	// Wait for the control plane's HTTP health endpoint to become reachable.
 	healthURL := fmt.Sprintf("http://localhost:%d/health", globalCfg.Daemon.Port)
 	deadline := time.Now().Add(startupTimeout)
 	httpClient := &http.Client{Timeout: 500 * time.Millisecond}
@@ -299,22 +300,27 @@ func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start task broker.
-	slog.Info("starting task broker")
-	dbPath := constants.BrokerDBPath()
+	// Start control plane.
+	slog.Info("starting control plane")
+	dbPath := constants.ControlPlaneDBPath()
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return fmt.Errorf("daemon: failed to create db dir: %w", err)
 	}
-	store, err := broker.NewSQLiteStore(dbPath)
+	store, err := controlplane.NewSQLiteStore(dbPath)
 	if err != nil {
-		return fmt.Errorf("daemon: failed to open broker database: %w", err)
+		return fmt.Errorf("daemon: failed to open control plane database: %w", err)
 	}
 	defer store.Close()
 
-	d.broker = broker.New(store)
+	d.cp = controlplane.New(store)
+
+	// Serve embedded web UI if available.
+	if web.StaticFS != nil {
+		d.cp.SetStaticFS(web.StaticFS)
+	}
 
 	// Set config reader so project endpoints can return descriptions.
-	d.broker.SetConfigReader(func(name string) string {
+	d.cp.SetConfigReader(func(name string) string {
 		cfg, err := config.LoadProject(name)
 		if err != nil {
 			return ""
@@ -322,12 +328,12 @@ func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string) error {
 		return cfg.Project.Description
 	})
 
-	// Register daemon-specific endpoints on the broker.
-	d.broker.RegisterHandler("GET /projects/{name}/state", d.handleProjectState)
+	// Register daemon-specific endpoints on the control plane.
+	d.cp.RegisterHandler("GET /api/projects/{name}/state", d.handleProjectState)
 
-	brokerAddr := fmt.Sprintf(":%d", globalCfg.Daemon.Port)
-	if err := d.broker.Start(brokerAddr); err != nil {
-		return fmt.Errorf("daemon: failed to start broker: %w", err)
+	cpAddr := fmt.Sprintf(":%d", globalCfg.Daemon.Port)
+	if err := d.cp.Start(cpAddr); err != nil {
+		return fmt.Errorf("daemon: failed to start control plane: %w", err)
 	}
 
 	// Set up signal handling.
@@ -520,7 +526,7 @@ func (d *Daemon) restartCrashedAgents(ctx context.Context, p *ProjectInstance, i
 
 		_ = p.docker.StopAgent(ctx, a.ID)
 
-		brokerURL := fmt.Sprintf("http://host.docker.internal:%d", p.Config.Broker.Port)
+		controlPlaneURL := fmt.Sprintf("http://host.docker.internal:%d", p.Config.ControlPlane.Port)
 		logDir := filepath.Join(p.AgentLogDir(), fmt.Sprintf("agent-%d", a.ID))
 		containerID, err := p.docker.StartAgent(ctx, docker.AgentOpts{
 			ProjectDir:     p.primaryRepoPath(),
@@ -531,7 +537,7 @@ func (d *Daemon) restartCrashedAgents(ctx context.Context, p *ProjectInstance, i
 			OAuthToken:     p.oauthToken,
 			GitAuthorName:  p.Config.Git.AuthorName,
 			GitAuthorEmail: p.Config.Git.AuthorEmail,
-			BrokerURL:      brokerURL,
+			ControlPlaneURL: controlPlaneURL,
 			UpstreamPaths:  p.UpstreamRepoPaths(),
 			LogDir:         logDir,
 		})
@@ -668,11 +674,11 @@ func (d *Daemon) syncRepos(p *ProjectInstance) {
 // that don't have a running ProjectInstance, and starts them. Also stops projects
 // marked as "stopped" that still have a running instance.
 func (d *Daemon) checkAndStartProjects(ctx context.Context) {
-	if d.broker == nil {
+	if d.cp == nil {
 		return
 	}
 
-	projects, err := d.broker.Store().ListProjects(ctx)
+	projects, err := d.cp.Store().ListProjects(ctx)
 	if err != nil {
 		return
 	}
@@ -708,9 +714,9 @@ func (d *Daemon) checkAndStartProjects(ctx context.Context) {
 }
 
 func (d *Daemon) shutdown(ctx context.Context) error {
-	if d.broker != nil {
+	if d.cp != nil {
 		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_ = d.broker.Shutdown(shutdownCtx)
+		_ = d.cp.Shutdown(shutdownCtx)
 		cancel()
 	}
 
@@ -727,7 +733,7 @@ func (d *Daemon) shutdown(ctx context.Context) error {
 	return nil
 }
 
-// handleProjectState serves GET /projects/{name}/state with daemon agent state.
+// handleProjectState serves GET /api/projects/{name}/state with daemon agent state.
 func (d *Daemon) handleProjectState(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 

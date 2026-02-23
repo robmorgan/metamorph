@@ -11,7 +11,7 @@ const (
 	GlobalConfigFile   = "config.json"
 	DaemonPIDFile      = "daemon.pid"
 	DaemonLogFile      = "daemon.log"
-	BrokerDBFile       = "broker.db"
+	ControlPlaneDBFile = "broker.db" // kept as broker.db for backwards compat
 	DockerDir          = "docker"
 	ProjectsDir        = "projects"
 )
@@ -32,8 +32,8 @@ const (
 	SystemPromptFile = "SYSTEM_PROMPT.md"
 )
 
-// DefaultBrokerPort is the default port for the task broker HTTP API.
-const DefaultBrokerPort = 8377
+// DefaultControlPlanePort is the default port for the control plane HTTP API.
+const DefaultControlPlanePort = 8377
 
 // AgentRoles maps built-in role names to their descriptions.
 var AgentRoles = map[string]string{
@@ -64,9 +64,9 @@ func GlobalConfigPath() string {
 	return filepath.Join(GlobalDir(), GlobalConfigFile)
 }
 
-// BrokerDBPath returns the path to the broker SQLite database.
-func BrokerDBPath() string {
-	return filepath.Join(GlobalDir(), BrokerDBFile)
+// ControlPlaneDBPath returns the path to the control plane SQLite database.
+func ControlPlaneDBPath() string {
+	return filepath.Join(GlobalDir(), ControlPlaneDBFile)
 }
 
 // UpstreamRepoPath returns the path to a project's upstream bare repo for a given label.

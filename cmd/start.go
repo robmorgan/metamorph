@@ -34,6 +34,11 @@ var startCmd = &cobra.Command{
 		}
 
 		fmt.Println("Daemon started successfully.")
+
+		globalCfg, err := config.LoadGlobal()
+		if err == nil {
+			fmt.Printf("\nWeb UI: http://localhost:%d\n", globalCfg.Daemon.Port)
+		}
 		return nil
 	},
 }

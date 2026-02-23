@@ -26,7 +26,7 @@ type Config struct {
 	Testing       TestingConfig       `json:"testing"`
 	Notifications NotificationsConfig `json:"notifications"`
 	Git           GitConfig           `json:"git"`
-	Broker        BrokerConfig        `json:"broker"`
+	ControlPlane  ControlPlaneConfig   `json:"broker"`
 }
 
 type ProjectConfig struct {
@@ -59,7 +59,7 @@ type GitConfig struct {
 	AuthorEmail string `json:"author_email"`
 }
 
-type BrokerConfig struct {
+type ControlPlaneConfig struct {
 	Port int `json:"port"`
 }
 
@@ -122,8 +122,8 @@ func applyDefaults(cfg *Config) {
 	if cfg.Docker.Image == "" {
 		cfg.Docker.Image = "metamorph-agent:latest"
 	}
-	if cfg.Broker.Port == 0 {
-		cfg.Broker.Port = constants.DefaultBrokerPort
+	if cfg.ControlPlane.Port == 0 {
+		cfg.ControlPlane.Port = constants.DefaultControlPlanePort
 	}
 	if cfg.Git.AuthorName == "" {
 		if name, err := exec.Command("git", "config", "user.name").Output(); err == nil {

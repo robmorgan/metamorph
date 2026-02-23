@@ -1,4 +1,4 @@
-package broker
+package controlplane
 
 import (
 	"context"
@@ -19,12 +19,12 @@ type SQLiteStore struct {
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	db, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
-		return nil, fmt.Errorf("broker: open database: %w", err)
+		return nil, fmt.Errorf("controlplane: open database: %w", err)
 	}
 
 	if err := migrate(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("broker: migrate: %w", err)
+		return nil, fmt.Errorf("controlplane: migrate: %w", err)
 	}
 
 	return &SQLiteStore{db: db}, nil
@@ -139,7 +139,7 @@ func (s *SQLiteStore) RegisterProject(ctx context.Context, name string) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO projects (name, status) VALUES (?, 'stopped')`, name)
 	if err != nil {
-		return fmt.Errorf("broker: register project: %w", err)
+		return fmt.Errorf("controlplane: register project: %w", err)
 	}
 	return nil
 }
@@ -147,11 +147,11 @@ func (s *SQLiteStore) RegisterProject(ctx context.Context, name string) error {
 func (s *SQLiteStore) UnregisterProject(ctx context.Context, name string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM project_repos WHERE project = ?`, name)
 	if err != nil {
-		return fmt.Errorf("broker: unregister project repos: %w", err)
+		return fmt.Errorf("controlplane: unregister project repos: %w", err)
 	}
 	_, err = s.db.ExecContext(ctx, `DELETE FROM projects WHERE name = ?`, name)
 	if err != nil {
-		return fmt.Errorf("broker: unregister project: %w", err)
+		return fmt.Errorf("controlplane: unregister project: %w", err)
 	}
 	return nil
 }
@@ -160,7 +160,7 @@ func (s *SQLiteStore) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT name, status, created_at FROM projects ORDER BY name`)
 	if err != nil {
-		return nil, fmt.Errorf("broker: list projects: %w", err)
+		return nil, fmt.Errorf("controlplane: list projects: %w", err)
 	}
 	defer rows.Close()
 
@@ -168,7 +168,7 @@ func (s *SQLiteStore) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
 	for rows.Next() {
 		var p ProjectInfo
 		if err := rows.Scan(&p.Name, &p.Status, &p.CreatedAt); err != nil {
-			return nil, fmt.Errorf("broker: scan project: %w", err)
+			return nil, fmt.Errorf("controlplane: scan project: %w", err)
 		}
 		projects = append(projects, p)
 	}
@@ -181,10 +181,10 @@ func (s *SQLiteStore) GetProject(ctx context.Context, name string) (*ProjectInfo
 		`SELECT name, status, created_at FROM projects WHERE name = ?`, name).
 		Scan(&p.Name, &p.Status, &p.CreatedAt)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("broker: project %q not found", name)
+		return nil, fmt.Errorf("controlplane: project %q not found", name)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("broker: get project: %w", err)
+		return nil, fmt.Errorf("controlplane: get project: %w", err)
 	}
 	return &p, nil
 }
@@ -193,11 +193,11 @@ func (s *SQLiteStore) UpdateProjectStatus(ctx context.Context, name, status stri
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE projects SET status = ? WHERE name = ?`, status, name)
 	if err != nil {
-		return fmt.Errorf("broker: update project status: %w", err)
+		return fmt.Errorf("controlplane: update project status: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("broker: project %q not found", name)
+		return fmt.Errorf("controlplane: project %q not found", name)
 	}
 	return nil
 }
@@ -207,7 +207,7 @@ func (s *SQLiteStore) AddProjectRepo(ctx context.Context, project, path, label s
 		`INSERT OR REPLACE INTO project_repos (project, path, label) VALUES (?, ?, ?)`,
 		project, path, label)
 	if err != nil {
-		return fmt.Errorf("broker: add project repo: %w", err)
+		return fmt.Errorf("controlplane: add project repo: %w", err)
 	}
 	return nil
 }
@@ -217,10 +217,10 @@ func (s *SQLiteStore) GetProjectByRepoPath(ctx context.Context, repoPath string)
 	err := s.db.QueryRowContext(ctx,
 		`SELECT project FROM project_repos WHERE path = ?`, repoPath).Scan(&project)
 	if err == sql.ErrNoRows {
-		return "", fmt.Errorf("broker: no project found for repo path %q", repoPath)
+		return "", fmt.Errorf("controlplane: no project found for repo path %q", repoPath)
 	}
 	if err != nil {
-		return "", fmt.Errorf("broker: lookup project by repo path: %w", err)
+		return "", fmt.Errorf("controlplane: lookup project by repo path: %w", err)
 	}
 	return project, nil
 }
@@ -232,7 +232,7 @@ func (s *SQLiteStore) ListProjectRepos(ctx context.Context, project string) ([]P
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, project, path, label, created_at FROM project_repos WHERE project = ? ORDER BY id`, project)
 	if err != nil {
-		return nil, fmt.Errorf("broker: list project repos: %w", err)
+		return nil, fmt.Errorf("controlplane: list project repos: %w", err)
 	}
 	defer rows.Close()
 
@@ -240,7 +240,7 @@ func (s *SQLiteStore) ListProjectRepos(ctx context.Context, project string) ([]P
 	for rows.Next() {
 		var r ProjectRepo
 		if err := rows.Scan(&r.ID, &r.Project, &r.Path, &r.Label, &r.CreatedAt); err != nil {
-			return nil, fmt.Errorf("broker: scan project repo: %w", err)
+			return nil, fmt.Errorf("controlplane: scan project repo: %w", err)
 		}
 		repos = append(repos, r)
 	}
@@ -253,7 +253,7 @@ func (s *SQLiteStore) CountTasksByProject(ctx context.Context, project string) (
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM tasks WHERE project = ?`, project).Scan(&count)
 	if err != nil {
-		return 0, fmt.Errorf("broker: count tasks: %w", err)
+		return 0, fmt.Errorf("controlplane: count tasks: %w", err)
 	}
 	return count, nil
 }
@@ -288,7 +288,7 @@ func (s *SQLiteStore) ListTasks(ctx context.Context, filter TaskFilter) ([]Task,
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("broker: list tasks: %w", err)
+		return nil, fmt.Errorf("controlplane: list tasks: %w", err)
 	}
 	defer rows.Close()
 
@@ -314,10 +314,10 @@ func (s *SQLiteStore) GetTask(ctx context.Context, taskID string) (*Task, error)
 
 	t, err := scanTaskRow(row)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("broker: task %q not found", taskID)
+		return nil, fmt.Errorf("controlplane: task %q not found", taskID)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("broker: get task: %w", err)
+		return nil, fmt.Errorf("controlplane: get task: %w", err)
 	}
 	return &t, nil
 }
@@ -347,7 +347,7 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, t Task) error {
 		t.ID, t.Title, t.Description, t.Status, t.Priority, nil,
 		t.RoleAffinity, project, t.Repo, t.Branch, t.CreatedAt, deps, t.Notes)
 	if err != nil {
-		return fmt.Errorf("broker: create task: %w", err)
+		return fmt.Errorf("controlplane: create task: %w", err)
 	}
 
 	_, err = s.db.ExecContext(ctx,
@@ -365,7 +365,7 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, taskID string, agentID int)
 		 WHERE id = ? AND status = 'open'`,
 		agentID, now, taskID)
 	if err != nil {
-		return fmt.Errorf("broker: claim task: %w", err)
+		return fmt.Errorf("controlplane: claim task: %w", err)
 	}
 
 	n, _ := res.RowsAffected()
@@ -373,9 +373,9 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, taskID string, agentID int)
 		var status string
 		err := s.db.QueryRowContext(ctx, `SELECT status FROM tasks WHERE id = ?`, taskID).Scan(&status)
 		if err == sql.ErrNoRows {
-			return fmt.Errorf("broker: task %q not found", taskID)
+			return fmt.Errorf("controlplane: task %q not found", taskID)
 		}
-		return fmt.Errorf("broker: task %q is not open (status=%s)", taskID, status)
+		return fmt.Errorf("controlplane: task %q is not open (status=%s)", taskID, status)
 	}
 
 	_, err = s.db.ExecContext(ctx,
@@ -391,12 +391,12 @@ func (s *SQLiteStore) ReleaseTask(ctx context.Context, taskID string, agentID in
 		 WHERE id = ? AND status = 'claimed' AND assignee = ?`,
 		taskID, agentID)
 	if err != nil {
-		return fmt.Errorf("broker: release task: %w", err)
+		return fmt.Errorf("controlplane: release task: %w", err)
 	}
 
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("broker: task %q not claimed by agent %d", taskID, agentID)
+		return fmt.Errorf("controlplane: task %q not claimed by agent %d", taskID, agentID)
 	}
 
 	_, err = s.db.ExecContext(ctx,
@@ -414,12 +414,12 @@ func (s *SQLiteStore) CompleteTask(ctx context.Context, taskID string, summary s
 		 WHERE id = ? AND status = 'claimed'`,
 		now, summary, summary, taskID)
 	if err != nil {
-		return fmt.Errorf("broker: complete task: %w", err)
+		return fmt.Errorf("controlplane: complete task: %w", err)
 	}
 
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("broker: task %q is not claimed", taskID)
+		return fmt.Errorf("controlplane: task %q is not claimed", taskID)
 	}
 
 	_, err = s.db.ExecContext(ctx,
@@ -463,12 +463,12 @@ func (s *SQLiteStore) UpdateTask(ctx context.Context, taskID string, updates Tas
 
 	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("broker: update task: %w", err)
+		return fmt.Errorf("controlplane: update task: %w", err)
 	}
 
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("broker: task %q not found", taskID)
+		return fmt.Errorf("controlplane: task %q not found", taskID)
 	}
 
 	if updates.Status != nil {
@@ -487,7 +487,7 @@ func (s *SQLiteStore) PostMessage(ctx context.Context, msg Message) error {
 		`INSERT INTO messages (from_agent, task_id, text, project) VALUES (?, ?, ?, ?)`,
 		msg.FromAgent, msg.TaskID, msg.Text, msg.Project)
 	if err != nil {
-		return fmt.Errorf("broker: post message: %w", err)
+		return fmt.Errorf("controlplane: post message: %w", err)
 	}
 	return nil
 }
@@ -507,7 +507,7 @@ func (s *SQLiteStore) ListMessages(ctx context.Context, since time.Time, project
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("broker: list messages: %w", err)
+		return nil, fmt.Errorf("controlplane: list messages: %w", err)
 	}
 	defer rows.Close()
 
@@ -516,7 +516,7 @@ func (s *SQLiteStore) ListMessages(ctx context.Context, since time.Time, project
 		var m Message
 		var taskID string
 		if err := rows.Scan(&m.ID, &m.FromAgent, &taskID, &m.Text, &m.Project, &m.CreatedAt); err != nil {
-			return nil, fmt.Errorf("broker: scan message: %w", err)
+			return nil, fmt.Errorf("controlplane: scan message: %w", err)
 		}
 		m.TaskID = taskID
 		msgs = append(msgs, m)
@@ -539,7 +539,7 @@ func scanTask(rows *sql.Rows) (Task, error) {
 		&claimedAt, &t.CreatedAt, &completedAt,
 		&deps, &t.Notes)
 	if err != nil {
-		return Task{}, fmt.Errorf("broker: scan task: %w", err)
+		return Task{}, fmt.Errorf("controlplane: scan task: %w", err)
 	}
 
 	t.RoleAffinity = roleAffinity

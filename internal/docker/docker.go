@@ -54,7 +54,7 @@ type AgentOpts struct {
 	OAuthToken     string // Claude Code OAuth token (if set, preferred over APIKey)
 	GitAuthorName  string // Git author name for commits (optional)
 	GitAuthorEmail string // Git author email for commits (optional)
-	BrokerURL      string // Task broker URL (optional)
+	ControlPlaneURL string // Control plane URL (optional)
 	UpstreamPath   string // Deprecated: single upstream path (kept for backward compat)
 	UpstreamPaths  []UpstreamMount // Per-repo upstream mounts
 	LogDir         string // Path to the agent log directory (if set, overrides default)
@@ -252,8 +252,8 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 	if opts.GitAuthorEmail != "" {
 		env = append(env, "GIT_AUTHOR_EMAIL="+opts.GitAuthorEmail)
 	}
-	if opts.BrokerURL != "" {
-		env = append(env, "BROKER_URL="+opts.BrokerURL)
+	if opts.ControlPlaneURL != "" {
+		env = append(env, "CONTROL_PLANE_URL="+opts.ControlPlaneURL)
 	}
 
 	config := &container.Config{

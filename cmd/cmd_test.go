@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/robmorgan/metamorph/internal/broker"
+	"github.com/robmorgan/metamorph/internal/controlplane"
 	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 )
@@ -81,11 +81,11 @@ func testProject(t *testing.T) string {
 	}
 
 	// Register project in broker DB.
-	dbPath := filepath.Join(home, constants.GlobalDirName, constants.BrokerDBFile)
+	dbPath := filepath.Join(home, constants.GlobalDirName, constants.ControlPlaneDBFile)
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	store, err := broker.NewSQLiteStore(dbPath)
+	store, err := controlplane.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,8 +262,8 @@ func TestInitCreatesAllFiles(t *testing.T) {
 	}
 
 	// Verify project registered in broker DB.
-	dbPath := filepath.Join(home, constants.GlobalDirName, constants.BrokerDBFile)
-	store, err := broker.NewSQLiteStore(dbPath)
+	dbPath := filepath.Join(home, constants.GlobalDirName, constants.ControlPlaneDBFile)
+	store, err := controlplane.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatalf("open broker db: %v", err)
 	}

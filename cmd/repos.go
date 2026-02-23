@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"text/tabwriter"
 
-	"github.com/robmorgan/metamorph/internal/broker"
+	"github.com/robmorgan/metamorph/internal/controlplane"
 	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/gitops"
@@ -59,10 +59,10 @@ var reposAddCmd = &cobra.Command{
 		}
 
 		// Register in broker DB.
-		dbPath := constants.BrokerDBPath()
-		store, err := broker.NewSQLiteStore(dbPath)
+		dbPath := constants.ControlPlaneDBPath()
+		store, err := controlplane.NewSQLiteStore(dbPath)
 		if err != nil {
-			return fmt.Errorf("failed to open broker database: %w", err)
+			return fmt.Errorf("failed to open database: %w", err)
 		}
 		defer store.Close()
 

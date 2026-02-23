@@ -59,7 +59,7 @@ func (p *ProjectInstance) StartAgents(ctx context.Context) error {
 			role = roles[(i-1)%len(roles)]
 		}
 
-		brokerURL := fmt.Sprintf("http://host.docker.internal:%d", p.Config.Broker.Port)
+		controlPlaneURL := fmt.Sprintf("http://host.docker.internal:%d", p.Config.ControlPlane.Port)
 
 		// Use the first repo path as the project directory for Docker mounts.
 		projectDir := p.primaryRepoPath()
@@ -76,7 +76,7 @@ func (p *ProjectInstance) StartAgents(ctx context.Context) error {
 			OAuthToken:     p.oauthToken,
 			GitAuthorName:  p.Config.Git.AuthorName,
 			GitAuthorEmail: p.Config.Git.AuthorEmail,
-			BrokerURL:      brokerURL,
+			ControlPlaneURL: controlPlaneURL,
 			UpstreamPaths:  p.UpstreamRepoPaths(),
 			LogDir:         logDir,
 		})

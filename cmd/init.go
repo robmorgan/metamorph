@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/robmorgan/metamorph/internal/broker"
+	"github.com/robmorgan/metamorph/internal/controlplane"
 	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/spf13/cobra"
@@ -78,13 +78,13 @@ var initCmd = &cobra.Command{
 		fmt.Printf("  Created %s\n", configPath)
 
 		// Register project in SQLite.
-		dbPath := constants.BrokerDBPath()
+		dbPath := constants.ControlPlaneDBPath()
 		if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 			return fmt.Errorf("failed to create db dir: %w", err)
 		}
-		store, err := broker.NewSQLiteStore(dbPath)
+		store, err := controlplane.NewSQLiteStore(dbPath)
 		if err != nil {
-			return fmt.Errorf("failed to open broker database: %w", err)
+			return fmt.Errorf("failed to open database: %w", err)
 		}
 		defer store.Close()
 
@@ -98,7 +98,7 @@ var initCmd = &cobra.Command{
 				return fmt.Errorf("failed to register repo %q: %w", label, err)
 			}
 		}
-		fmt.Println("  Registered project in broker database")
+		fmt.Println("  Registered project")
 
 		// Write AGENT_PROMPT.md skeleton only if it doesn't already exist.
 		agentPromptPath := filepath.Join(absDir, constants.AgentPromptFile)

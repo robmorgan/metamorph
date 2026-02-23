@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/robmorgan/metamorph/internal/broker"
+	"github.com/robmorgan/metamorph/internal/controlplane"
 	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/spf13/cobra"
@@ -63,8 +63,8 @@ func resolveProject(cmd *cobra.Command) (string, *config.Config, error) {
 	}
 
 	// 3. Query SQLite for project name from repo path.
-	dbPath := constants.BrokerDBPath()
-	store, err := broker.NewSQLiteStore(dbPath)
+	dbPath := constants.ControlPlaneDBPath()
+	store, err := controlplane.NewSQLiteStore(dbPath)
 	if err != nil {
 		return "", nil, fmt.Errorf("metamorph not initialized (run 'metamorph init' first)")
 	}
@@ -95,8 +95,8 @@ func resolveProjectName(cmd *cobra.Command) (string, error) {
 		return "", fmt.Errorf("not in a git repository")
 	}
 
-	dbPath := constants.BrokerDBPath()
-	store, err := broker.NewSQLiteStore(dbPath)
+	dbPath := constants.ControlPlaneDBPath()
+	store, err := controlplane.NewSQLiteStore(dbPath)
 	if err != nil {
 		return "", fmt.Errorf("metamorph not initialized (run 'metamorph init' first)")
 	}
@@ -128,11 +128,11 @@ func findGitRoot() (string, error) {
 	}
 }
 
-// brokerURL returns the HTTP URL for the broker API.
-func brokerURL() string {
+// controlPlaneURL returns the HTTP URL for the control plane API.
+func controlPlaneURL() string {
 	cfg, err := config.LoadGlobal()
 	if err != nil {
-		return fmt.Sprintf("http://localhost:%d", constants.DefaultBrokerPort)
+		return fmt.Sprintf("http://localhost:%d", constants.DefaultControlPlanePort)
 	}
 	return fmt.Sprintf("http://localhost:%d", cfg.Daemon.Port)
 }

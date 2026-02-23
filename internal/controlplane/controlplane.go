@@ -1,9 +1,10 @@
-package broker
+package controlplane
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -12,13 +13,14 @@ import (
 	"time"
 )
 
-// Broker is the HTTP task broker that agents interact with.
-type Broker struct {
+// ControlPlane is the HTTP server that manages projects, tasks, and agents.
+type ControlPlane struct {
 	store         Store
 	mu            sync.Mutex
 	server        *http.Server
 	extraHandlers []extraHandler
 	configReader  func(name string) string // returns project description
+	staticFS      fs.FS                    // embedded web UI (nil when built with -tags noui)
 }
 
 type extraHandler struct {
@@ -26,30 +28,30 @@ type extraHandler struct {
 	handler http.HandlerFunc
 }
 
-// New creates a Broker backed by the given Store.
-func New(store Store) *Broker {
-	return &Broker{store: store}
+// New creates a ControlPlane backed by the given Store.
+func New(store Store) *ControlPlane {
+	return &ControlPlane{store: store}
 }
 
-// Start begins serving the broker API on the given address (e.g. ":8377").
+// Start begins serving the control plane API on the given address (e.g. ":8377").
 // It returns immediately; call Shutdown to stop.
-func (b *Broker) Start(addr string) error {
-	b.server = &http.Server{
+func (cp *ControlPlane) Start(addr string) error {
+	cp.server = &http.Server{
 		Addr:         addr,
-		Handler:      b.buildMux(),
+		Handler:      cp.buildMux(),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("broker: listen %s: %w", addr, err)
+		return fmt.Errorf("controlplane: listen %s: %w", addr, err)
 	}
 
 	go func() {
-		slog.Info("broker listening", "addr", addr)
-		if err := b.server.Serve(ln); err != nil && err != http.ErrServerClosed {
-			slog.Error("broker serve error", "error", err)
+		slog.Info("control plane listening", "addr", addr)
+		if err := cp.server.Serve(ln); err != nil && err != http.ErrServerClosed {
+			slog.Error("control plane serve error", "error", err)
 		}
 	}()
 
@@ -57,64 +59,80 @@ func (b *Broker) Start(addr string) error {
 }
 
 // Shutdown gracefully stops the HTTP server.
-func (b *Broker) Shutdown(ctx context.Context) error {
-	if b.server != nil {
-		return b.server.Shutdown(ctx)
+func (cp *ControlPlane) Shutdown(ctx context.Context) error {
+	if cp.server != nil {
+		return cp.server.Shutdown(ctx)
 	}
 	return nil
 }
 
 // Handler returns the HTTP handler for testing without starting a server.
-func (b *Broker) Handler() http.Handler {
-	return b.buildMux()
+func (cp *ControlPlane) Handler() http.Handler {
+	return cp.buildMux()
 }
 
-// RegisterHandler adds an extra HTTP handler to the broker's mux.
+// RegisterHandler adds an extra HTTP handler to the control plane's mux.
 // Must be called before Start.
-func (b *Broker) RegisterHandler(pattern string, handler http.HandlerFunc) {
-	b.extraHandlers = append(b.extraHandlers, extraHandler{pattern, handler})
+func (cp *ControlPlane) RegisterHandler(pattern string, handler http.HandlerFunc) {
+	cp.extraHandlers = append(cp.extraHandlers, extraHandler{pattern, handler})
 }
 
 // SetConfigReader sets a function that returns a project description by name.
-func (b *Broker) SetConfigReader(fn func(name string) string) {
-	b.configReader = fn
+func (cp *ControlPlane) SetConfigReader(fn func(name string) string) {
+	cp.configReader = fn
+}
+
+// SetStaticFS sets the embedded filesystem for serving the web UI.
+func (cp *ControlPlane) SetStaticFS(fsys fs.FS) {
+	cp.staticFS = fsys
 }
 
 // Store returns the underlying Store for direct access (e.g. project resolution).
-func (b *Broker) Store() Store {
-	return b.store
+func (cp *ControlPlane) Store() Store {
+	return cp.store
 }
 
-func (b *Broker) buildMux() http.Handler {
+func (cp *ControlPlane) buildMux() http.Handler {
 	mux := http.NewServeMux()
 
 	// Task endpoints.
-	mux.HandleFunc("GET /tasks", b.handleListTasks)
-	mux.HandleFunc("POST /tasks", b.handleCreateTask)
-	mux.HandleFunc("GET /tasks/{id}", b.handleGetTask)
-	mux.HandleFunc("PATCH /tasks/{id}", b.handleUpdateTask)
-	mux.HandleFunc("POST /tasks/{id}/claim", b.handleClaimTask)
-	mux.HandleFunc("POST /tasks/{id}/release", b.handleReleaseTask)
-	mux.HandleFunc("POST /tasks/{id}/complete", b.handleCompleteTask)
+	mux.HandleFunc("GET /api/tasks", cp.handleListTasks)
+	mux.HandleFunc("POST /api/tasks", cp.handleCreateTask)
+	mux.HandleFunc("GET /api/tasks/{id}", cp.handleGetTask)
+	mux.HandleFunc("PATCH /api/tasks/{id}", cp.handleUpdateTask)
+	mux.HandleFunc("POST /api/tasks/{id}/claim", cp.handleClaimTask)
+	mux.HandleFunc("POST /api/tasks/{id}/release", cp.handleReleaseTask)
+	mux.HandleFunc("POST /api/tasks/{id}/complete", cp.handleCompleteTask)
 
 	// Message endpoints.
-	mux.HandleFunc("GET /messages", b.handleListMessages)
-	mux.HandleFunc("POST /messages", b.handlePostMessage)
+	mux.HandleFunc("GET /api/messages", cp.handleListMessages)
+	mux.HandleFunc("POST /api/messages", cp.handlePostMessage)
 
 	// Project endpoints.
-	mux.HandleFunc("GET /projects", b.handleListProjects)
-	mux.HandleFunc("POST /projects", b.handleRegisterProject)
-	mux.HandleFunc("GET /projects/{name}", b.handleGetProject)
-	mux.HandleFunc("DELETE /projects/{name}", b.handleUnregisterProject)
-	mux.HandleFunc("POST /projects/{name}/start", b.handleStartProject)
-	mux.HandleFunc("POST /projects/{name}/stop", b.handleStopProject)
-	mux.HandleFunc("GET /projects/{name}/status", b.handleProjectStatus)
+	mux.HandleFunc("GET /api/projects", cp.handleListProjects)
+	mux.HandleFunc("POST /api/projects", cp.handleRegisterProject)
+	mux.HandleFunc("GET /api/projects/{name}", cp.handleGetProject)
+	mux.HandleFunc("DELETE /api/projects/{name}", cp.handleUnregisterProject)
+	mux.HandleFunc("POST /api/projects/{name}/start", cp.handleStartProject)
+	mux.HandleFunc("POST /api/projects/{name}/stop", cp.handleStopProject)
+	mux.HandleFunc("GET /api/projects/{name}/status", cp.handleProjectStatus)
 
-	mux.HandleFunc("GET /health", b.handleHealth)
+	// Health endpoint at both /api/health and /health (bare for daemon startup checks).
+	mux.HandleFunc("GET /api/health", cp.handleHealth)
+	mux.HandleFunc("GET /health", cp.handleHealth)
 
 	// Extra handlers registered by the daemon.
-	for _, h := range b.extraHandlers {
+	for _, h := range cp.extraHandlers {
 		mux.HandleFunc(h.pattern, h.handler)
+	}
+
+	// Serve embedded web UI if available.
+	if cp.staticFS != nil {
+		sub, err := fs.Sub(cp.staticFS, "out")
+		if err == nil {
+			fileServer := http.FileServer(http.FS(sub))
+			mux.Handle("GET /", fileServer)
+		}
 	}
 
 	return corsMiddleware(mux)
@@ -138,20 +156,20 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 // --- Task Handlers ---
 
-func (b *Broker) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (b *Broker) handleListTasks(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	filter := TaskFilter{
 		Status:       r.URL.Query().Get("status"),
 		RoleAffinity: r.URL.Query().Get("role"),
 		Project:      r.URL.Query().Get("project"),
 	}
 
-	b.mu.Lock()
-	tasks, err := b.store.ListTasks(r.Context(), filter)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	tasks, err := cp.store.ListTasks(r.Context(), filter)
+	cp.mu.Unlock()
 
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -163,12 +181,12 @@ func (b *Broker) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tasks)
 }
 
-func (b *Broker) handleGetTask(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	b.mu.Lock()
-	task, err := b.store.GetTask(r.Context(), id)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	task, err := cp.store.GetTask(r.Context(), id)
+	cp.mu.Unlock()
 
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -193,7 +211,7 @@ type createTaskRequest struct {
 	DependsOn    []string `json:"depends_on"`
 }
 
-func (b *Broker) handleCreateTask(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	var req createTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
@@ -223,9 +241,9 @@ func (b *Broker) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	b.mu.Lock()
-	err := b.store.CreateTask(r.Context(), task)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	err := cp.store.CreateTask(r.Context(), task)
+	cp.mu.Unlock()
 
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)
@@ -239,7 +257,7 @@ type claimRequest struct {
 	AgentID int `json:"agent_id"`
 }
 
-func (b *Broker) handleClaimTask(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	var req claimRequest
@@ -252,9 +270,9 @@ func (b *Broker) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.mu.Lock()
-	err := b.store.ClaimTask(r.Context(), id, req.AgentID)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	err := cp.store.ClaimTask(r.Context(), id, req.AgentID)
+	cp.mu.Unlock()
 
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -272,7 +290,7 @@ type releaseRequest struct {
 	AgentID int `json:"agent_id"`
 }
 
-func (b *Broker) handleReleaseTask(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleReleaseTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	var req releaseRequest
@@ -285,9 +303,9 @@ func (b *Broker) handleReleaseTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.mu.Lock()
-	err := b.store.ReleaseTask(r.Context(), id, req.AgentID)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	err := cp.store.ReleaseTask(r.Context(), id, req.AgentID)
+	cp.mu.Unlock()
 
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)
@@ -301,7 +319,7 @@ type completeRequest struct {
 	Summary string `json:"summary"`
 }
 
-func (b *Broker) handleCompleteTask(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleCompleteTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	var req completeRequest
@@ -310,9 +328,9 @@ func (b *Broker) handleCompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.mu.Lock()
-	err := b.store.CompleteTask(r.Context(), id, req.Summary)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	err := cp.store.CompleteTask(r.Context(), id, req.Summary)
+	cp.mu.Unlock()
 
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)
@@ -322,7 +340,7 @@ func (b *Broker) handleCompleteTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "done"})
 }
 
-func (b *Broker) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	var updates TaskUpdate
@@ -331,9 +349,9 @@ func (b *Broker) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.mu.Lock()
-	err := b.store.UpdateTask(r.Context(), id, updates)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	err := cp.store.UpdateTask(r.Context(), id, updates)
+	cp.mu.Unlock()
 
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -356,7 +374,7 @@ type postMessageRequest struct {
 	Project   string `json:"project"`
 }
 
-func (b *Broker) handlePostMessage(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	var req postMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
@@ -378,9 +396,9 @@ func (b *Broker) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		Project:   req.Project,
 	}
 
-	b.mu.Lock()
-	err := b.store.PostMessage(r.Context(), msg)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	err := cp.store.PostMessage(r.Context(), msg)
+	cp.mu.Unlock()
 
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -390,7 +408,7 @@ func (b *Broker) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "sent"})
 }
 
-func (b *Broker) handleListMessages(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	sinceStr := r.URL.Query().Get("since")
 	project := r.URL.Query().Get("project")
 	var since time.Time
@@ -403,9 +421,9 @@ func (b *Broker) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	b.mu.Lock()
-	msgs, err := b.store.ListMessages(r.Context(), since, project)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	msgs, err := cp.store.ListMessages(r.Context(), since, project)
+	cp.mu.Unlock()
 
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -419,10 +437,10 @@ func (b *Broker) handleListMessages(w http.ResponseWriter, r *http.Request) {
 
 // --- Project Handlers ---
 
-func (b *Broker) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	b.mu.Lock()
-	projects, err := b.store.ListProjects(r.Context())
-	b.mu.Unlock()
+func (cp *ControlPlane) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	cp.mu.Lock()
+	projects, err := cp.store.ListProjects(r.Context())
+	cp.mu.Unlock()
 
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -431,7 +449,7 @@ func (b *Broker) handleListProjects(w http.ResponseWriter, r *http.Request) {
 
 	details := make([]ProjectDetail, 0, len(projects))
 	for _, p := range projects {
-		details = append(details, b.enrichProject(r.Context(), p))
+		details = append(details, cp.enrichProject(r.Context(), p))
 	}
 	writeJSON(w, http.StatusOK, details)
 }
@@ -442,7 +460,7 @@ type registerProjectRequest struct {
 	Label    string `json:"label"`
 }
 
-func (b *Broker) handleRegisterProject(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleRegisterProject(w http.ResponseWriter, r *http.Request) {
 	var req registerProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
@@ -453,12 +471,12 @@ func (b *Broker) handleRegisterProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b.mu.Lock()
-	err := b.store.RegisterProject(r.Context(), req.Name)
+	cp.mu.Lock()
+	err := cp.store.RegisterProject(r.Context(), req.Name)
 	if err == nil && req.RepoPath != "" {
-		err = b.store.AddProjectRepo(r.Context(), req.Name, req.RepoPath, req.Label)
+		err = cp.store.AddProjectRepo(r.Context(), req.Name, req.RepoPath, req.Label)
 	}
-	b.mu.Unlock()
+	cp.mu.Unlock()
 
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)
@@ -468,12 +486,12 @@ func (b *Broker) handleRegisterProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "registered"})
 }
 
-func (b *Broker) handleGetProject(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
-	b.mu.Lock()
-	project, err := b.store.GetProject(r.Context(), name)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	project, err := cp.store.GetProject(r.Context(), name)
+	cp.mu.Unlock()
 
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -483,15 +501,15 @@ func (b *Broker) handleGetProject(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, b.enrichProject(r.Context(), *project))
+	writeJSON(w, http.StatusOK, cp.enrichProject(r.Context(), *project))
 }
 
-func (b *Broker) handleUnregisterProject(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleUnregisterProject(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
-	b.mu.Lock()
-	err := b.store.UnregisterProject(r.Context(), name)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	err := cp.store.UnregisterProject(r.Context(), name)
+	cp.mu.Unlock()
 
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -500,12 +518,12 @@ func (b *Broker) handleUnregisterProject(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "unregistered"})
 }
 
-func (b *Broker) handleStartProject(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleStartProject(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
-	b.mu.Lock()
-	err := b.store.UpdateProjectStatus(r.Context(), name, "running")
-	b.mu.Unlock()
+	cp.mu.Lock()
+	err := cp.store.UpdateProjectStatus(r.Context(), name, "running")
+	cp.mu.Unlock()
 
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -518,12 +536,12 @@ func (b *Broker) handleStartProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
 }
 
-func (b *Broker) handleStopProject(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleStopProject(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
-	b.mu.Lock()
-	err := b.store.UpdateProjectStatus(r.Context(), name, "stopped")
-	b.mu.Unlock()
+	cp.mu.Lock()
+	err := cp.store.UpdateProjectStatus(r.Context(), name, "stopped")
+	cp.mu.Unlock()
 
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -536,12 +554,12 @@ func (b *Broker) handleStopProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
-func (b *Broker) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
+func (cp *ControlPlane) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
-	b.mu.Lock()
-	project, err := b.store.GetProject(r.Context(), name)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	project, err := cp.store.GetProject(r.Context(), name)
+	cp.mu.Unlock()
 
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -556,17 +574,17 @@ func (b *Broker) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 
 // enrichProject builds a ProjectDetail from a ProjectInfo by querying repos, task counts,
 // and reading project description from config.
-func (b *Broker) enrichProject(ctx context.Context, p ProjectInfo) ProjectDetail {
+func (cp *ControlPlane) enrichProject(ctx context.Context, p ProjectInfo) ProjectDetail {
 	detail := ProjectDetail{
 		Name:      p.Name,
 		Status:    p.Status,
 		CreatedAt: p.CreatedAt,
 	}
 
-	b.mu.Lock()
-	repos, _ := b.store.ListProjectRepos(ctx, p.Name)
-	taskCount, _ := b.store.CountTasksByProject(ctx, p.Name)
-	b.mu.Unlock()
+	cp.mu.Lock()
+	repos, _ := cp.store.ListProjectRepos(ctx, p.Name)
+	taskCount, _ := cp.store.CountTasksByProject(ctx, p.Name)
+	cp.mu.Unlock()
 
 	if repos == nil {
 		repos = []ProjectRepo{}
@@ -574,8 +592,8 @@ func (b *Broker) enrichProject(ctx context.Context, p ProjectInfo) ProjectDetail
 	detail.Repos = repos
 	detail.TaskCount = taskCount
 
-	if b.configReader != nil {
-		detail.Description = b.configReader(p.Name)
+	if cp.configReader != nil {
+		detail.Description = cp.configReader(p.Name)
 	}
 
 	return detail

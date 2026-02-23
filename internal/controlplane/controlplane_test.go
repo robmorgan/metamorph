@@ -1,4 +1,4 @@
-package broker
+package controlplane
 
 import (
 	"bytes"
@@ -417,34 +417,34 @@ func TestScopedTasks(t *testing.T) {
 
 // --- HTTP Handler Tests ---
 
-func testServer(t *testing.T) (*Broker, *httptest.Server) {
+func testServer(t *testing.T) (*ControlPlane, *httptest.Server) {
 	t.Helper()
 	store := testStore(t)
-	b := New(store)
-	ts := httptest.NewServer(b.Handler())
+	cp := New(store)
+	ts := httptest.NewServer(cp.Handler())
 	t.Cleanup(ts.Close)
-	return b, ts
+	return cp, ts
 }
 
 func TestHTTPCreateAndList(t *testing.T) {
 	_, ts := testServer(t)
 
 	// Register project first (FK constraint).
-	http.Post(ts.URL+"/projects", "application/json",
+	http.Post(ts.URL+"/api/projects", "application/json",
 		bytes.NewBufferString(`{"name":"my-app"}`))
 
 	body := `{"id":"t1","title":"Build API","priority":1,"project":"my-app"}`
-	resp, err := http.Post(ts.URL+"/tasks", "application/json", bytes.NewBufferString(body))
+	resp, err := http.Post(ts.URL+"/api/tasks", "application/json", bytes.NewBufferString(body))
 	if err != nil {
-		t.Fatalf("POST /tasks: %v", err)
+		t.Fatalf("POST /api/tasks: %v", err)
 	}
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST /tasks status = %d, want 201", resp.StatusCode)
+		t.Fatalf("POST /api/tasks status = %d, want 201", resp.StatusCode)
 	}
 
-	resp, err = http.Get(ts.URL + "/tasks?project=my-app")
+	resp, err = http.Get(ts.URL + "/api/tasks?project=my-app")
 	if err != nil {
-		t.Fatalf("GET /tasks: %v", err)
+		t.Fatalf("GET /api/tasks: %v", err)
 	}
 
 	var tasks []Task
@@ -464,16 +464,16 @@ func TestHTTPClaimConflict(t *testing.T) {
 	_, ts := testServer(t)
 
 	body := `{"id":"t1","title":"Work"}`
-	http.Post(ts.URL+"/tasks", "application/json", bytes.NewBufferString(body))
+	http.Post(ts.URL+"/api/tasks", "application/json", bytes.NewBufferString(body))
 
 	claimBody := `{"agent_id":1}`
-	resp, _ := http.Post(ts.URL+"/tasks/t1/claim", "application/json", bytes.NewBufferString(claimBody))
+	resp, _ := http.Post(ts.URL+"/api/tasks/t1/claim", "application/json", bytes.NewBufferString(claimBody))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("first claim: status = %d", resp.StatusCode)
 	}
 
 	claimBody2 := `{"agent_id":2}`
-	resp, _ = http.Post(ts.URL+"/tasks/t1/claim", "application/json", bytes.NewBufferString(claimBody2))
+	resp, _ = http.Post(ts.URL+"/api/tasks/t1/claim", "application/json", bytes.NewBufferString(claimBody2))
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("second claim: status = %d, want 409", resp.StatusCode)
 	}
@@ -482,18 +482,18 @@ func TestHTTPClaimConflict(t *testing.T) {
 func TestHTTPTaskLifecycle(t *testing.T) {
 	_, ts := testServer(t)
 
-	http.Post(ts.URL+"/tasks", "application/json",
+	http.Post(ts.URL+"/api/tasks", "application/json",
 		bytes.NewBufferString(`{"id":"t1","title":"Full lifecycle"}`))
-	http.Post(ts.URL+"/tasks/t1/claim", "application/json",
+	http.Post(ts.URL+"/api/tasks/t1/claim", "application/json",
 		bytes.NewBufferString(`{"agent_id":1}`))
 
-	resp, _ := http.Post(ts.URL+"/tasks/t1/complete", "application/json",
+	resp, _ := http.Post(ts.URL+"/api/tasks/t1/complete", "application/json",
 		bytes.NewBufferString(`{"summary":"All done"}`))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("complete: status = %d", resp.StatusCode)
 	}
 
-	resp, _ = http.Get(ts.URL + "/tasks/t1")
+	resp, _ = http.Get(ts.URL + "/api/tasks/t1")
 	var task Task
 	json.NewDecoder(resp.Body).Decode(&task)
 	if task.Status != "done" {
@@ -504,18 +504,18 @@ func TestHTTPTaskLifecycle(t *testing.T) {
 func TestHTTPRelease(t *testing.T) {
 	_, ts := testServer(t)
 
-	http.Post(ts.URL+"/tasks", "application/json",
+	http.Post(ts.URL+"/api/tasks", "application/json",
 		bytes.NewBufferString(`{"id":"t1","title":"Release test"}`))
-	http.Post(ts.URL+"/tasks/t1/claim", "application/json",
+	http.Post(ts.URL+"/api/tasks/t1/claim", "application/json",
 		bytes.NewBufferString(`{"agent_id":1}`))
 
-	resp, _ := http.Post(ts.URL+"/tasks/t1/release", "application/json",
+	resp, _ := http.Post(ts.URL+"/api/tasks/t1/release", "application/json",
 		bytes.NewBufferString(`{"agent_id":1}`))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("release: status = %d", resp.StatusCode)
 	}
 
-	resp, _ = http.Get(ts.URL + "/tasks/t1")
+	resp, _ = http.Get(ts.URL + "/api/tasks/t1")
 	var task Task
 	json.NewDecoder(resp.Body).Decode(&task)
 	if task.Status != "open" {
@@ -529,12 +529,12 @@ func TestHTTPMessages(t *testing.T) {
 	since := time.Now().UTC().Add(-time.Second).Format(time.RFC3339)
 
 	body := `{"from_agent":1,"text":"Need help with auth"}`
-	resp, _ := http.Post(ts.URL+"/messages", "application/json", bytes.NewBufferString(body))
+	resp, _ := http.Post(ts.URL+"/api/messages", "application/json", bytes.NewBufferString(body))
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST /messages status = %d", resp.StatusCode)
+		t.Fatalf("POST /api/messages status = %d", resp.StatusCode)
 	}
 
-	resp, _ = http.Get(ts.URL + "/messages?since=" + since)
+	resp, _ = http.Get(ts.URL + "/api/messages?since=" + since)
 	var msgs []Message
 	json.NewDecoder(resp.Body).Decode(&msgs)
 	if len(msgs) != 1 {
@@ -548,17 +548,17 @@ func TestHTTPMessages(t *testing.T) {
 func TestHTTPUpdateTask(t *testing.T) {
 	_, ts := testServer(t)
 
-	http.Post(ts.URL+"/tasks", "application/json",
+	http.Post(ts.URL+"/api/tasks", "application/json",
 		bytes.NewBufferString(`{"id":"t1","title":"Original"}`))
 
-	req, _ := http.NewRequest("PATCH", ts.URL+"/tasks/t1", bytes.NewBufferString(`{"title":"Updated"}`))
+	req, _ := http.NewRequest("PATCH", ts.URL+"/api/tasks/t1", bytes.NewBufferString(`{"title":"Updated"}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp, _ := http.DefaultClient.Do(req)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("PATCH status = %d", resp.StatusCode)
 	}
 
-	resp, _ = http.Get(ts.URL + "/tasks/t1")
+	resp, _ = http.Get(ts.URL + "/api/tasks/t1")
 	var task Task
 	json.NewDecoder(resp.Body).Decode(&task)
 	if task.Title != "Updated" {
@@ -569,9 +569,19 @@ func TestHTTPUpdateTask(t *testing.T) {
 func TestHTTPHealth(t *testing.T) {
 	_, ts := testServer(t)
 
+	// Test bare /health endpoint (used by daemon startup checks).
 	resp, err := http.Get(ts.URL + "/health")
 	if err != nil {
 		t.Fatalf("GET /health: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+
+	// Test /api/health endpoint.
+	resp, err = http.Get(ts.URL + "/api/health")
+	if err != nil {
+		t.Fatalf("GET /api/health: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
@@ -581,7 +591,7 @@ func TestHTTPHealth(t *testing.T) {
 func TestHTTPGetTaskNotFound(t *testing.T) {
 	_, ts := testServer(t)
 
-	resp, _ := http.Get(ts.URL + "/tasks/nonexistent")
+	resp, _ := http.Get(ts.URL + "/api/tasks/nonexistent")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}
@@ -590,7 +600,7 @@ func TestHTTPGetTaskNotFound(t *testing.T) {
 func TestHTTPCreateMissingTitle(t *testing.T) {
 	_, ts := testServer(t)
 
-	resp, _ := http.Post(ts.URL+"/tasks", "application/json",
+	resp, _ := http.Post(ts.URL+"/api/tasks", "application/json",
 		bytes.NewBufferString(`{"id":"t1"}`))
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
@@ -600,14 +610,14 @@ func TestHTTPCreateMissingTitle(t *testing.T) {
 func TestHTTPFilterByStatus(t *testing.T) {
 	_, ts := testServer(t)
 
-	http.Post(ts.URL+"/tasks", "application/json",
+	http.Post(ts.URL+"/api/tasks", "application/json",
 		bytes.NewBufferString(`{"id":"t1","title":"Open task"}`))
-	http.Post(ts.URL+"/tasks", "application/json",
+	http.Post(ts.URL+"/api/tasks", "application/json",
 		bytes.NewBufferString(`{"id":"t2","title":"Claimable"}`))
-	http.Post(ts.URL+"/tasks/t2/claim", "application/json",
+	http.Post(ts.URL+"/api/tasks/t2/claim", "application/json",
 		bytes.NewBufferString(`{"agent_id":1}`))
 
-	resp, _ := http.Get(ts.URL + "/tasks?status=open")
+	resp, _ := http.Get(ts.URL + "/api/tasks?status=open")
 	var tasks []Task
 	json.NewDecoder(resp.Body).Decode(&tasks)
 	if len(tasks) != 1 {
@@ -621,7 +631,7 @@ func TestHTTPFilterByStatus(t *testing.T) {
 func TestHTTPAutoGenerateID(t *testing.T) {
 	_, ts := testServer(t)
 
-	resp, _ := http.Post(ts.URL+"/tasks", "application/json",
+	resp, _ := http.Post(ts.URL+"/api/tasks", "application/json",
 		bytes.NewBufferString(`{"title":"Auto ID"}`))
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d", resp.StatusCode)
@@ -639,13 +649,13 @@ func TestHTTPProjectCRUD(t *testing.T) {
 
 	// Register.
 	body := `{"name":"test-proj","repo_path":"/tmp/test-proj"}`
-	resp, _ := http.Post(ts.URL+"/projects", "application/json", bytes.NewBufferString(body))
+	resp, _ := http.Post(ts.URL+"/api/projects", "application/json", bytes.NewBufferString(body))
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST /projects status = %d", resp.StatusCode)
+		t.Fatalf("POST /api/projects status = %d", resp.StatusCode)
 	}
 
 	// List.
-	resp, _ = http.Get(ts.URL + "/projects")
+	resp, _ = http.Get(ts.URL + "/api/projects")
 	var projects []ProjectInfo
 	json.NewDecoder(resp.Body).Decode(&projects)
 	if len(projects) != 1 {
@@ -653,7 +663,7 @@ func TestHTTPProjectCRUD(t *testing.T) {
 	}
 
 	// Get.
-	resp, _ = http.Get(ts.URL + "/projects/test-proj")
+	resp, _ = http.Get(ts.URL + "/api/projects/test-proj")
 	var p ProjectInfo
 	json.NewDecoder(resp.Body).Decode(&p)
 	if p.Name != "test-proj" {
@@ -661,28 +671,28 @@ func TestHTTPProjectCRUD(t *testing.T) {
 	}
 
 	// Start.
-	resp, _ = http.Post(ts.URL+"/projects/test-proj/start", "application/json", nil)
+	resp, _ = http.Post(ts.URL+"/api/projects/test-proj/start", "application/json", nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /projects/test-proj/start status = %d", resp.StatusCode)
+		t.Fatalf("POST /api/projects/test-proj/start status = %d", resp.StatusCode)
 	}
 
 	// Status.
-	resp, _ = http.Get(ts.URL + "/projects/test-proj/status")
+	resp, _ = http.Get(ts.URL + "/api/projects/test-proj/status")
 	json.NewDecoder(resp.Body).Decode(&p)
 	if p.Status != "running" {
 		t.Errorf("Status = %q, want running", p.Status)
 	}
 
 	// Stop.
-	resp, _ = http.Post(ts.URL+"/projects/test-proj/stop", "application/json", nil)
+	resp, _ = http.Post(ts.URL+"/api/projects/test-proj/stop", "application/json", nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /projects/test-proj/stop status = %d", resp.StatusCode)
+		t.Fatalf("POST /api/projects/test-proj/stop status = %d", resp.StatusCode)
 	}
 
 	// Delete.
-	req, _ := http.NewRequest("DELETE", ts.URL+"/projects/test-proj", nil)
+	req, _ := http.NewRequest("DELETE", ts.URL+"/api/projects/test-proj", nil)
 	resp, _ = http.DefaultClient.Do(req)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("DELETE /projects/test-proj status = %d", resp.StatusCode)
+		t.Fatalf("DELETE /api/projects/test-proj status = %d", resp.StatusCode)
 	}
 }

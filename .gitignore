@@ -12,3 +12,6 @@ bin/*
 # node
 node_modules
 
+# Next.js static export (build artifact, embedded into Go binary)
+web/out/
+

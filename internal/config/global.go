@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/robmorgan/metamorph/internal/constants"
+	"github.com/tidwall/jsonc"
 )
 
 // GlobalConfig holds system-wide daemon settings from ~/.metamorph/config.json.
@@ -46,7 +47,7 @@ func LoadGlobalFrom(path string) (*GlobalConfig, error) {
 		return nil, fmt.Errorf("reading global config: %w", err)
 	}
 
-	if err := json.Unmarshal(data, cfg); err != nil {
+	if err := json.Unmarshal(jsonc.ToJSON(data), cfg); err != nil {
 		return nil, fmt.Errorf("parsing global config: %w", err)
 	}
 
@@ -80,7 +81,7 @@ func SaveGlobalTo(cfg *GlobalConfig, path string) error {
 
 func applyGlobalDefaults(cfg *GlobalConfig) {
 	if cfg.Daemon.Port == 0 {
-		cfg.Daemon.Port = constants.DefaultBrokerPort
+		cfg.Daemon.Port = constants.DefaultControlPlanePort
 	}
 	if cfg.Defaults.Model == "" {
 		cfg.Defaults.Model = "claude-opus-4-6"
