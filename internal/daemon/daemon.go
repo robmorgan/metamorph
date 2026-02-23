@@ -80,13 +80,20 @@ type Daemon struct {
 }
 
 // Start launches the daemon as a background subprocess. It re-execs the
-// current binary with "start --daemon-mode" and waits for heartbeat.
+// current binary with "start --daemon-mode" and waits for the broker's
+// HTTP health endpoint to become reachable.
 func Start(apiKey, oauthToken string) error {
 	globalDir := constants.GlobalDir()
 	pidPath := filepath.Join(globalDir, constants.DaemonPIDFile)
 
 	if IsRunning() {
 		return fmt.Errorf("daemon is already running")
+	}
+
+	// Load global config to determine the daemon port for health checks.
+	globalCfg, err := config.LoadGlobal()
+	if err != nil {
+		return fmt.Errorf("daemon: failed to load config: %w", err)
 	}
 
 	exe, err := os.Executable()
@@ -131,9 +138,10 @@ func Start(apiKey, oauthToken string) error {
 	childPID := cmd.Process.Pid
 	_ = cmd.Process.Release()
 
-	// Wait for heartbeat file to appear.
-	heartbeatPath := filepath.Join(globalDir, constants.HeartbeatFile)
+	// Wait for the broker's HTTP health endpoint to become reachable.
+	healthURL := fmt.Sprintf("http://localhost:%d/health", globalCfg.Daemon.Port)
 	deadline := time.Now().Add(startupTimeout)
+	httpClient := &http.Client{Timeout: 500 * time.Millisecond}
 
 	tailFile, err := os.Open(logPath)
 	if err != nil {
@@ -146,12 +154,16 @@ func Start(apiKey, oauthToken string) error {
 	printed := make(map[string]bool)
 
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(heartbeatPath); err == nil {
-			if tailFile != nil {
-				tailFile.Close()
+		resp, err := httpClient.Get(healthURL)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				if tailFile != nil {
+					tailFile.Close()
+				}
+				logFile.Close()
+				return nil
 			}
-			logFile.Close()
-			return nil
 		}
 
 		if tailFile != nil {
@@ -187,7 +199,7 @@ func Start(apiKey, oauthToken string) error {
 	logFile.Close()
 	hint := readDaemonLogHint(logPath)
 
-	return fmt.Errorf("daemon: timed out waiting for heartbeat after %s%s", startupTimeout, hint)
+	return fmt.Errorf("daemon: timed out waiting for health endpoint after %s%s", startupTimeout, hint)
 }
 
 func readDaemonLogHint(logPath string) string {
@@ -319,10 +331,6 @@ func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string, dockerClient
 		return fmt.Errorf("daemon: failed to start broker: %w", err)
 	}
 
-	// Write initial heartbeat.
-	heartbeatPath := filepath.Join(globalDir, constants.HeartbeatFile)
-	_ = os.WriteFile(heartbeatPath, []byte(time.Now().UTC().Format(time.RFC3339)), 0644)
-
 	// Set up signal handling.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -420,10 +428,6 @@ func (d *Daemon) monitor(ctx context.Context) {
 
 	// Check for projects that need starting or stopping based on DB status.
 	d.checkAndStartProjects(ctx)
-
-	// Write heartbeat.
-	heartbeatPath := filepath.Join(d.globalDir, constants.HeartbeatFile)
-	_ = os.WriteFile(heartbeatPath, []byte(now.Format(time.RFC3339)), 0644)
 }
 
 // monitorProject runs monitoring for a single project.

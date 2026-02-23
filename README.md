@@ -203,7 +203,6 @@ The default prompt includes:
    - Counts new commits and batches notifications (60s window)
    - Clears stale task locks older than **2 hours**
    - Scans the last 50 lines of each agent's log for `ERROR:` or `FAIL`
-   - Writes a heartbeat to `.metamorph/heartbeat`
 
 The daemon detaches from the terminal (via `setsid`) and writes its PID to `.metamorph/daemon.pid`. `metamorph stop` sends SIGTERM and waits up to 30 seconds before SIGKILL.
 
@@ -226,7 +225,6 @@ your-project/
     ├── upstream.git/         # bare git repo (source of truth)
     ├── state.json            # daemon state (agents, stats)
     ├── daemon.pid            # daemon process ID
-    ├── heartbeat             # last monitor tick (RFC3339)
     └── docker/               # build context (Dockerfile, entrypoint.sh)
 ```
 

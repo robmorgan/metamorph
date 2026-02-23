@@ -984,7 +984,7 @@ func TestShutdown(t *testing.T) {
 			projects:  map[string]*ProjectInstance{"test": p},
 		}
 
-		// Write a PID file to verify it gets removed.
+		// Write PID file to verify it gets removed.
 		pidPath := filepath.Join(dir, constants.DaemonPIDFile)
 		_ = os.WriteFile(pidPath, []byte("12345"), 0644)
 

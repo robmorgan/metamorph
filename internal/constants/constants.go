@@ -11,7 +11,6 @@ const (
 	GlobalConfigFile   = "config.json"
 	DaemonPIDFile      = "daemon.pid"
 	DaemonLogFile      = "daemon.log"
-	HeartbeatFile      = "heartbeat"
 	BrokerDBFile       = "broker.db"
 	DockerDir          = "docker"
 	ProjectsDir        = "projects"

@@ -109,7 +109,9 @@ func NewClient(projectName string) (*Client, error) {
 		return nil, fmt.Errorf("docker: failed to create client: %w", err)
 	}
 
-	if _, err := cli.Ping(context.Background()); err != nil {
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer pingCancel()
+	if _, err := cli.Ping(pingCtx); err != nil {
 		return nil, fmt.Errorf("docker: daemon is not running (is Docker started?): %w", err)
 	}
 
