@@ -13,7 +13,11 @@ const (
 	DaemonPIDFile   = ".metamorph/daemon.pid"
 	DaemonLogFile   = ".metamorph/daemon.log"
 	HeartbeatFile   = ".metamorph/heartbeat"
+	BrokerDBFile    = ".metamorph/broker.db"
 )
+
+// DefaultBrokerPort is the default port for the task broker HTTP API.
+const DefaultBrokerPort = 8377
 
 // AgentRoles maps built-in role names to their descriptions.
 var AgentRoles = map[string]string{

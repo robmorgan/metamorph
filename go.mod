@@ -7,6 +7,7 @@ toolchain go1.24.5
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/docker/docker v28.0.0+incompatible
+	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/spf13/cobra v1.8.1
 )

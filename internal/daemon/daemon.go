@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/robmorgan/metamorph/internal/broker"
 	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/docker"
@@ -72,6 +73,7 @@ type Daemon struct {
 	docker     docker.DockerClient
 	state      *State
 	startedAt  time.Time
+	broker     *broker.Broker
 
 	// Notification state.
 	prevCommitCount   int                  // previous commit count for batching
@@ -309,6 +311,21 @@ func Run(projectDir string, cfg *config.Config, apiKey, oauthToken string, docke
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Start task broker.
+	slog.Info("starting task broker")
+	dbPath := filepath.Join(projectDir, constants.BrokerDBFile)
+	store, err := broker.NewSQLiteStore(dbPath)
+	if err != nil {
+		return fmt.Errorf("daemon: failed to open broker database: %w", err)
+	}
+	defer store.Close()
+
+	d.broker = broker.New(store)
+	brokerAddr := fmt.Sprintf(":%d", cfg.Broker.Port)
+	if err := d.broker.Start(brokerAddr); err != nil {
+		return fmt.Errorf("daemon: failed to start broker: %w", err)
+	}
+
 	// Build image.
 	slog.Info("building docker image")
 	if err := d.docker.BuildImage(projectDir, cfg.Docker.ExtraPackages); err != nil {
@@ -361,6 +378,10 @@ func (d *Daemon) startAgents(ctx context.Context) ([]AgentState, error) {
 			role = roles[(i-1)%len(roles)]
 		}
 
+		// The broker URL uses the Docker bridge gateway (host.docker.internal)
+		// so containers can reach the daemon's HTTP server.
+		brokerURL := fmt.Sprintf("http://host.docker.internal:%d", d.cfg.Broker.Port)
+
 		slog.Info("starting agent", "agent", i, "role", role)
 		containerID, err := d.docker.StartAgent(ctx, docker.AgentOpts{
 			ProjectDir:     d.projectDir,
@@ -371,6 +392,7 @@ func (d *Daemon) startAgents(ctx context.Context) ([]AgentState, error) {
 			OAuthToken:     d.oauthToken,
 			GitAuthorName:  d.cfg.Git.AuthorName,
 			GitAuthorEmail: d.cfg.Git.AuthorEmail,
+			BrokerURL:      brokerURL,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to start agent-%d: %w", i, err)
@@ -474,6 +496,7 @@ func (d *Daemon) restartCrashedAgents(ctx context.Context, infos []docker.AgentI
 		_ = d.docker.StopAgent(ctx, a.ID)
 
 		// Restart.
+		brokerURL := fmt.Sprintf("http://host.docker.internal:%d", d.cfg.Broker.Port)
 		containerID, err := d.docker.StartAgent(ctx, docker.AgentOpts{
 			ProjectDir:     d.projectDir,
 			AgentID:        a.ID,
@@ -483,6 +506,7 @@ func (d *Daemon) restartCrashedAgents(ctx context.Context, infos []docker.AgentI
 			OAuthToken:     d.oauthToken,
 			GitAuthorName:  d.cfg.Git.AuthorName,
 			GitAuthorEmail: d.cfg.Git.AuthorEmail,
+			BrokerURL:      brokerURL,
 		})
 		if err == nil {
 			a.ContainerID = containerID
@@ -706,6 +730,13 @@ func (d *Daemon) syncRepos() {
 
 // shutdown stops all agents and writes final state.
 func (d *Daemon) shutdown(ctx context.Context) error {
+	// Stop broker first (agents may still be making requests).
+	if d.broker != nil {
+		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = d.broker.Shutdown(shutdownCtx)
+		cancel()
+	}
+
 	_ = d.docker.StopAllAgents(ctx)
 
 	// Final sync so the latest agent work is visible in the project dir.

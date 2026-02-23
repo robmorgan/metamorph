@@ -17,6 +17,7 @@ type Config struct {
 	Testing       TestingConfig       `toml:"testing"`
 	Notifications NotificationsConfig `toml:"notifications"`
 	Git           GitConfig           `toml:"git"`
+	Broker        BrokerConfig        `toml:"broker"`
 }
 
 type ProjectConfig struct {
@@ -49,6 +50,10 @@ type GitConfig struct {
 	AuthorEmail string `toml:"author_email"`
 }
 
+type BrokerConfig struct {
+	Port int `toml:"port"`
+}
+
 // Load reads a TOML config file from path and validates it.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -74,6 +79,9 @@ func Load(path string) (*Config, error) {
 func applyDefaults(cfg *Config) {
 	if cfg.Docker.Image == "" {
 		cfg.Docker.Image = "metamorph-agent:latest"
+	}
+	if cfg.Broker.Port == 0 {
+		cfg.Broker.Port = constants.DefaultBrokerPort
 	}
 	if cfg.Git.AuthorName == "" {
 		if name, err := exec.Command("git", "config", "user.name").Output(); err == nil {

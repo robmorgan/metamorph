@@ -1,0 +1,68 @@
+package broker
+
+import (
+	"context"
+	"time"
+)
+
+// Task represents a unit of work in the broker.
+type Task struct {
+	ID           string     `json:"id"`
+	Title        string     `json:"title"`
+	Description  string     `json:"description,omitempty"`
+	Status       string     `json:"status"`        // open, claimed, done, blocked
+	Priority     int        `json:"priority"`       // 0=critical, 4=backlog
+	Assignee     *int       `json:"assignee"`       // agent ID
+	RoleAffinity string     `json:"role_affinity,omitempty"`
+	ClaimedAt    *time.Time `json:"claimed_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	DependsOn    []string   `json:"depends_on,omitempty"`
+	Notes        string     `json:"notes,omitempty"`
+}
+
+// TaskFilter controls which tasks are returned by ListTasks.
+type TaskFilter struct {
+	Status       string // filter by status (empty = all)
+	RoleAffinity string // filter by role_affinity (empty = all)
+	AssigneeID   *int   // filter by assignee (nil = all)
+}
+
+// TaskUpdate holds mutable fields for PATCH /tasks/{id}.
+type TaskUpdate struct {
+	Status      *string `json:"status,omitempty"`
+	Priority    *int    `json:"priority,omitempty"`
+	Notes       *string `json:"notes,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Title       *string `json:"title,omitempty"`
+}
+
+// Message represents an inter-agent message.
+type Message struct {
+	ID        int64     `json:"id"`
+	FromAgent int       `json:"from_agent"`
+	TaskID    string    `json:"task_id,omitempty"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Store is the persistence interface for the task broker. Implementations
+// must be safe for concurrent use from a single goroutine (the daemon
+// serializes all calls via sync.Mutex).
+type Store interface {
+	// Task operations.
+	ListTasks(ctx context.Context, filter TaskFilter) ([]Task, error)
+	GetTask(ctx context.Context, taskID string) (*Task, error)
+	CreateTask(ctx context.Context, t Task) error
+	ClaimTask(ctx context.Context, taskID string, agentID int) error
+	ReleaseTask(ctx context.Context, taskID string, agentID int) error
+	CompleteTask(ctx context.Context, taskID string, summary string) error
+	UpdateTask(ctx context.Context, taskID string, updates TaskUpdate) error
+
+	// Messaging.
+	PostMessage(ctx context.Context, msg Message) error
+	ListMessages(ctx context.Context, since time.Time) ([]Message, error)
+
+	// Lifecycle.
+	Close() error
+}

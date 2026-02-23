@@ -48,6 +48,7 @@ type AgentOpts struct {
 	OAuthToken     string // Claude Code OAuth token (if set, preferred over APIKey)
 	GitAuthorName  string // Git author name for commits (optional)
 	GitAuthorEmail string // Git author email for commits (optional)
+	BrokerURL      string // Task broker URL (optional)
 }
 
 // AgentInfo describes a running agent container.
@@ -227,6 +228,9 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 	}
 	if opts.GitAuthorEmail != "" {
 		env = append(env, "GIT_AUTHOR_EMAIL="+opts.GitAuthorEmail)
+	}
+	if opts.BrokerURL != "" {
+		env = append(env, "BROKER_URL="+opts.BrokerURL)
 	}
 
 	config := &container.Config{
