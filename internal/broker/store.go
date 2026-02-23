@@ -14,6 +14,7 @@ type Task struct {
 	Priority     int        `json:"priority"`       // 0=critical, 4=backlog
 	Assignee     *int       `json:"assignee"`       // agent ID
 	RoleAffinity string     `json:"role_affinity,omitempty"`
+	Project      string     `json:"project"`        // project name
 	ClaimedAt    *time.Time `json:"claimed_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	CompletedAt  *time.Time `json:"completed_at,omitempty"`
@@ -26,6 +27,7 @@ type TaskFilter struct {
 	Status       string // filter by status (empty = all)
 	RoleAffinity string // filter by role_affinity (empty = all)
 	AssigneeID   *int   // filter by assignee (nil = all)
+	Project      string // filter by project (empty = all)
 }
 
 // TaskUpdate holds mutable fields for PATCH /tasks/{id}.
@@ -43,6 +45,23 @@ type Message struct {
 	FromAgent int       `json:"from_agent"`
 	TaskID    string    `json:"task_id,omitempty"`
 	Text      string    `json:"text"`
+	Project   string    `json:"project"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ProjectInfo holds metadata about a registered project.
+type ProjectInfo struct {
+	Name      string    `json:"name"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ProjectRepo maps a repo directory path to a project.
+type ProjectRepo struct {
+	ID        int64     `json:"id"`
+	Project   string    `json:"project"`
+	Path      string    `json:"path"`
+	Label     string    `json:"label"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -61,7 +80,16 @@ type Store interface {
 
 	// Messaging.
 	PostMessage(ctx context.Context, msg Message) error
-	ListMessages(ctx context.Context, since time.Time) ([]Message, error)
+	ListMessages(ctx context.Context, since time.Time, project string) ([]Message, error)
+
+	// Project registry.
+	RegisterProject(ctx context.Context, name string) error
+	UnregisterProject(ctx context.Context, name string) error
+	ListProjects(ctx context.Context) ([]ProjectInfo, error)
+	GetProject(ctx context.Context, name string) (*ProjectInfo, error)
+	UpdateProjectStatus(ctx context.Context, name, status string) error
+	AddProjectRepo(ctx context.Context, project, path, label string) error
+	GetProjectByRepoPath(ctx context.Context, repoPath string) (string, error)
 
 	// Lifecycle.
 	Close() error

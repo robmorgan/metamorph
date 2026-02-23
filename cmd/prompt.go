@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 
 	"github.com/robmorgan/metamorph/assets"
 	"github.com/robmorgan/metamorph/internal/constants"
@@ -22,12 +21,16 @@ var promptCmd = &cobra.Command{
 			return nil
 		}
 
-		projectDir, err := resolveProjectDir()
+		_, cfg, err := resolveProject(cmd)
 		if err != nil {
 			return err
 		}
 
-		promptPath := filepath.Join(projectDir, constants.AgentPromptFile)
+		if len(cfg.Repos) == 0 {
+			return fmt.Errorf("no repos configured")
+		}
+		repoPath := cfg.Repos[0].Path
+		promptPath := repoPath + "/" + constants.AgentPromptFile
 
 		editFlag, _ := cmd.Flags().GetBool("edit")
 

@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,15 +20,15 @@ var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run a one-shot agent task",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectDir, err := resolveProjectDir()
+		projectName, cfg, err := resolveProject(cmd)
 		if err != nil {
 			return err
 		}
 
-		cfg, err := loadConfig(projectDir)
-		if err != nil {
-			return err
+		if len(cfg.Repos) == 0 {
+			return fmt.Errorf("no repos configured for project %q", projectName)
 		}
+		repoPath := cfg.Repos[0].Path
 
 		oauthToken := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
 		apiKey := os.Getenv("ANTHROPIC_API_KEY")
@@ -44,7 +43,7 @@ var runCmd = &cobra.Command{
 		once, _ := cmd.Flags().GetBool("once")
 		role, _ := cmd.Flags().GetString("role")
 
-		upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
+		upstreamPath := constants.UpstreamRepoPath(projectName)
 
 		// Clone upstream to temp dir.
 		tmpDir, err := os.MkdirTemp("", "metamorph-run-*")
@@ -53,7 +52,7 @@ var runCmd = &cobra.Command{
 		}
 		defer func() { _ = os.RemoveAll(tmpDir) }()
 
-		agentDir := filepath.Join(tmpDir, "agent-work")
+		agentDir := tmpDir + "/agent-work"
 		if err := gitops.CloneForAgent(upstreamPath, 0, agentDir); err != nil {
 			return fmt.Errorf("failed to clone upstream: %w", err)
 		}
@@ -75,7 +74,7 @@ var runCmd = &cobra.Command{
 
 				// Read the system prompt (embedded) and user prompt (project dir),
 				// then concatenate and expand ${VAR} placeholders.
-				userPromptPath := filepath.Join(projectDir, constants.AgentPromptFile)
+				userPromptPath := repoPath + "/" + constants.AgentPromptFile
 				userPromptData, err := os.ReadFile(userPromptPath)
 				if err != nil {
 					slog.Error("failed to read user agent prompt", "error", err)

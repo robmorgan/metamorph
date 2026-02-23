@@ -30,11 +30,14 @@ func TestCreateAndGetTask(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
+	store.RegisterProject(ctx, "my-app")
+
 	task := Task{
 		ID:          "task-1",
 		Title:       "Implement auth",
 		Description: "Add JWT authentication",
 		Priority:    1,
+		Project:     "my-app",
 	}
 
 	if err := store.CreateTask(ctx, task); err != nil {
@@ -58,6 +61,9 @@ func TestCreateAndGetTask(t *testing.T) {
 	if got.Priority != 1 {
 		t.Errorf("Priority = %d, want 1", got.Priority)
 	}
+	if got.Project != "my-app" {
+		t.Errorf("Project = %q, want my-app", got.Project)
+	}
 }
 
 func TestGetTaskNotFound(t *testing.T) {
@@ -74,9 +80,12 @@ func TestListTasksFilter(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	store.CreateTask(ctx, Task{ID: "t1", Title: "A", Status: "open", Priority: 2})
-	store.CreateTask(ctx, Task{ID: "t2", Title: "B", Status: "open", Priority: 1, RoleAffinity: "tester"})
-	store.CreateTask(ctx, Task{ID: "t3", Title: "C", Status: "done", Priority: 0})
+	store.RegisterProject(ctx, "proj-a")
+	store.RegisterProject(ctx, "proj-b")
+
+	store.CreateTask(ctx, Task{ID: "t1", Title: "A", Status: "open", Priority: 2, Project: "proj-a"})
+	store.CreateTask(ctx, Task{ID: "t2", Title: "B", Status: "open", Priority: 1, RoleAffinity: "tester", Project: "proj-a"})
+	store.CreateTask(ctx, Task{ID: "t3", Title: "C", Status: "done", Priority: 0, Project: "proj-b"})
 
 	// All open tasks.
 	tasks, err := store.ListTasks(ctx, TaskFilter{Status: "open"})
@@ -86,7 +95,6 @@ func TestListTasksFilter(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("expected 2 open tasks, got %d", len(tasks))
 	}
-	// Should be ordered by priority: t2 (1) before t1 (2).
 	if tasks[0].ID != "t2" {
 		t.Errorf("first task = %q, want t2 (lower priority)", tasks[0].ID)
 	}
@@ -99,6 +107,23 @@ func TestListTasksFilter(t *testing.T) {
 	if len(tasks) != 1 || tasks[0].ID != "t2" {
 		t.Errorf("role filter: got %d tasks", len(tasks))
 	}
+
+	// Filter by project.
+	tasks, err = store.ListTasks(ctx, TaskFilter{Project: "proj-a"})
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Errorf("project filter: expected 2 tasks for proj-a, got %d", len(tasks))
+	}
+
+	tasks, err = store.ListTasks(ctx, TaskFilter{Project: "proj-b"})
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "t3" {
+		t.Errorf("project filter proj-b: got %d tasks", len(tasks))
+	}
 }
 
 func TestClaimTaskAtomic(t *testing.T) {
@@ -107,17 +132,14 @@ func TestClaimTaskAtomic(t *testing.T) {
 
 	store.CreateTask(ctx, Task{ID: "t1", Title: "Work"})
 
-	// First claim succeeds.
 	if err := store.ClaimTask(ctx, "t1", 1); err != nil {
 		t.Fatalf("ClaimTask: %v", err)
 	}
 
-	// Second claim fails (already claimed).
 	if err := store.ClaimTask(ctx, "t1", 2); err == nil {
 		t.Fatal("expected error on double claim")
 	}
 
-	// Verify state.
 	task, _ := store.GetTask(ctx, "t1")
 	if task.Status != "claimed" {
 		t.Errorf("Status = %q, want claimed", task.Status)
@@ -172,12 +194,10 @@ func TestReleaseTask(t *testing.T) {
 	store.CreateTask(ctx, Task{ID: "t1", Title: "Work"})
 	store.ClaimTask(ctx, "t1", 1)
 
-	// Wrong agent can't release.
 	if err := store.ReleaseTask(ctx, "t1", 2); err == nil {
 		t.Fatal("expected error when wrong agent releases")
 	}
 
-	// Correct agent releases.
 	if err := store.ReleaseTask(ctx, "t1", 1); err != nil {
 		t.Fatalf("ReleaseTask: %v", err)
 	}
@@ -255,10 +275,10 @@ func TestMessages(t *testing.T) {
 
 	before := time.Now().UTC().Add(-time.Second)
 
-	store.PostMessage(ctx, Message{FromAgent: 1, Text: "I'm blocked on auth"})
-	store.PostMessage(ctx, Message{FromAgent: 2, TaskID: "t1", Text: "Working on it"})
+	store.PostMessage(ctx, Message{FromAgent: 1, Text: "I'm blocked on auth", Project: "proj-a"})
+	store.PostMessage(ctx, Message{FromAgent: 2, TaskID: "t1", Text: "Working on it", Project: "proj-a"})
 
-	msgs, err := store.ListMessages(ctx, before)
+	msgs, err := store.ListMessages(ctx, before, "")
 	if err != nil {
 		t.Fatalf("ListMessages: %v", err)
 	}
@@ -267,6 +287,15 @@ func TestMessages(t *testing.T) {
 	}
 	if msgs[0].Text != "I'm blocked on auth" {
 		t.Errorf("msg[0].Text = %q", msgs[0].Text)
+	}
+
+	// Filter by project.
+	msgs, err = store.ListMessages(ctx, before, "proj-a")
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Errorf("expected 2 messages for proj-a, got %d", len(msgs))
 	}
 }
 
@@ -289,6 +318,103 @@ func TestDependsOnRoundTrip(t *testing.T) {
 	}
 }
 
+// --- Project Registry Tests ---
+
+func TestProjectRegistry(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	// Register projects.
+	if err := store.RegisterProject(ctx, "proj-a"); err != nil {
+		t.Fatalf("RegisterProject: %v", err)
+	}
+	if err := store.RegisterProject(ctx, "proj-b"); err != nil {
+		t.Fatalf("RegisterProject: %v", err)
+	}
+
+	// List.
+	projects, err := store.ListProjects(ctx)
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	if len(projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(projects))
+	}
+
+	// Get.
+	p, err := store.GetProject(ctx, "proj-a")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if p.Status != "stopped" {
+		t.Errorf("Status = %q, want stopped", p.Status)
+	}
+
+	// Update status.
+	if err := store.UpdateProjectStatus(ctx, "proj-a", "running"); err != nil {
+		t.Fatalf("UpdateProjectStatus: %v", err)
+	}
+	p, _ = store.GetProject(ctx, "proj-a")
+	if p.Status != "running" {
+		t.Errorf("Status = %q, want running", p.Status)
+	}
+
+	// Add repo and lookup.
+	if err := store.AddProjectRepo(ctx, "proj-a", "/home/user/proj-a", ""); err != nil {
+		t.Fatalf("AddProjectRepo: %v", err)
+	}
+	name, err := store.GetProjectByRepoPath(ctx, "/home/user/proj-a")
+	if err != nil {
+		t.Fatalf("GetProjectByRepoPath: %v", err)
+	}
+	if name != "proj-a" {
+		t.Errorf("project = %q, want proj-a", name)
+	}
+
+	// Unknown path.
+	_, err = store.GetProjectByRepoPath(ctx, "/unknown/path")
+	if err == nil {
+		t.Fatal("expected error for unknown repo path")
+	}
+
+	// Unregister.
+	if err := store.UnregisterProject(ctx, "proj-a"); err != nil {
+		t.Fatalf("UnregisterProject: %v", err)
+	}
+	projects, _ = store.ListProjects(ctx)
+	if len(projects) != 1 {
+		t.Errorf("expected 1 project after unregister, got %d", len(projects))
+	}
+}
+
+func TestScopedTasks(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	store.RegisterProject(ctx, "proj-a")
+	store.RegisterProject(ctx, "proj-b")
+
+	store.CreateTask(ctx, Task{ID: "a1", Title: "Task A", Project: "proj-a"})
+	store.CreateTask(ctx, Task{ID: "b1", Title: "Task B", Project: "proj-b"})
+
+	// Tasks from proj-a not visible in proj-b queries.
+	tasks, _ := store.ListTasks(ctx, TaskFilter{Project: "proj-a"})
+	if len(tasks) != 1 || tasks[0].ID != "a1" {
+		t.Errorf("proj-a tasks: got %d tasks", len(tasks))
+	}
+
+	tasks, _ = store.ListTasks(ctx, TaskFilter{Project: "proj-b"})
+	if len(tasks) != 1 || tasks[0].ID != "b1" {
+		t.Errorf("proj-b tasks: got %d tasks", len(tasks))
+	}
+
+	// Unscoped lists all.
+	tasks, _ = store.ListTasks(ctx, TaskFilter{})
+	if len(tasks) != 2 {
+		t.Errorf("unscoped tasks: expected 2, got %d", len(tasks))
+	}
+}
+
 // --- HTTP Handler Tests ---
 
 func testServer(t *testing.T) (*Broker, *httptest.Server) {
@@ -303,8 +429,11 @@ func testServer(t *testing.T) (*Broker, *httptest.Server) {
 func TestHTTPCreateAndList(t *testing.T) {
 	_, ts := testServer(t)
 
-	// Create a task.
-	body := `{"id":"t1","title":"Build API","priority":1}`
+	// Register project first (FK constraint).
+	http.Post(ts.URL+"/projects", "application/json",
+		bytes.NewBufferString(`{"name":"my-app"}`))
+
+	body := `{"id":"t1","title":"Build API","priority":1,"project":"my-app"}`
 	resp, err := http.Post(ts.URL+"/tasks", "application/json", bytes.NewBufferString(body))
 	if err != nil {
 		t.Fatalf("POST /tasks: %v", err)
@@ -313,8 +442,7 @@ func TestHTTPCreateAndList(t *testing.T) {
 		t.Fatalf("POST /tasks status = %d, want 201", resp.StatusCode)
 	}
 
-	// List tasks.
-	resp, err = http.Get(ts.URL + "/tasks")
+	resp, err = http.Get(ts.URL + "/tasks?project=my-app")
 	if err != nil {
 		t.Fatalf("GET /tasks: %v", err)
 	}
@@ -327,23 +455,23 @@ func TestHTTPCreateAndList(t *testing.T) {
 	if tasks[0].Title != "Build API" {
 		t.Errorf("Title = %q", tasks[0].Title)
 	}
+	if tasks[0].Project != "my-app" {
+		t.Errorf("Project = %q", tasks[0].Project)
+	}
 }
 
 func TestHTTPClaimConflict(t *testing.T) {
 	_, ts := testServer(t)
 
-	// Create task.
 	body := `{"id":"t1","title":"Work"}`
 	http.Post(ts.URL+"/tasks", "application/json", bytes.NewBufferString(body))
 
-	// First claim.
 	claimBody := `{"agent_id":1}`
 	resp, _ := http.Post(ts.URL+"/tasks/t1/claim", "application/json", bytes.NewBufferString(claimBody))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("first claim: status = %d", resp.StatusCode)
 	}
 
-	// Second claim → 409.
 	claimBody2 := `{"agent_id":2}`
 	resp, _ = http.Post(ts.URL+"/tasks/t1/claim", "application/json", bytes.NewBufferString(claimBody2))
 	if resp.StatusCode != http.StatusConflict {
@@ -354,22 +482,17 @@ func TestHTTPClaimConflict(t *testing.T) {
 func TestHTTPTaskLifecycle(t *testing.T) {
 	_, ts := testServer(t)
 
-	// Create.
 	http.Post(ts.URL+"/tasks", "application/json",
 		bytes.NewBufferString(`{"id":"t1","title":"Full lifecycle"}`))
-
-	// Claim.
 	http.Post(ts.URL+"/tasks/t1/claim", "application/json",
 		bytes.NewBufferString(`{"agent_id":1}`))
 
-	// Complete.
 	resp, _ := http.Post(ts.URL+"/tasks/t1/complete", "application/json",
 		bytes.NewBufferString(`{"summary":"All done"}`))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("complete: status = %d", resp.StatusCode)
 	}
 
-	// Get and verify done.
 	resp, _ = http.Get(ts.URL + "/tasks/t1")
 	var task Task
 	json.NewDecoder(resp.Body).Decode(&task)
@@ -392,7 +515,6 @@ func TestHTTPRelease(t *testing.T) {
 		t.Fatalf("release: status = %d", resp.StatusCode)
 	}
 
-	// Task should be open again.
 	resp, _ = http.Get(ts.URL + "/tasks/t1")
 	var task Task
 	json.NewDecoder(resp.Body).Decode(&task)
@@ -406,14 +528,12 @@ func TestHTTPMessages(t *testing.T) {
 
 	since := time.Now().UTC().Add(-time.Second).Format(time.RFC3339)
 
-	// Post message.
 	body := `{"from_agent":1,"text":"Need help with auth"}`
 	resp, _ := http.Post(ts.URL+"/messages", "application/json", bytes.NewBufferString(body))
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("POST /messages status = %d", resp.StatusCode)
 	}
 
-	// List messages.
 	resp, _ = http.Get(ts.URL + "/messages?since=" + since)
 	var msgs []Message
 	json.NewDecoder(resp.Body).Decode(&msgs)
@@ -511,5 +631,58 @@ func TestHTTPAutoGenerateID(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&task)
 	if task.ID == "" {
 		t.Error("expected auto-generated ID")
+	}
+}
+
+func TestHTTPProjectCRUD(t *testing.T) {
+	_, ts := testServer(t)
+
+	// Register.
+	body := `{"name":"test-proj","repo_path":"/tmp/test-proj"}`
+	resp, _ := http.Post(ts.URL+"/projects", "application/json", bytes.NewBufferString(body))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /projects status = %d", resp.StatusCode)
+	}
+
+	// List.
+	resp, _ = http.Get(ts.URL + "/projects")
+	var projects []ProjectInfo
+	json.NewDecoder(resp.Body).Decode(&projects)
+	if len(projects) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(projects))
+	}
+
+	// Get.
+	resp, _ = http.Get(ts.URL + "/projects/test-proj")
+	var p ProjectInfo
+	json.NewDecoder(resp.Body).Decode(&p)
+	if p.Name != "test-proj" {
+		t.Errorf("Name = %q", p.Name)
+	}
+
+	// Start.
+	resp, _ = http.Post(ts.URL+"/projects/test-proj/start", "application/json", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /projects/test-proj/start status = %d", resp.StatusCode)
+	}
+
+	// Status.
+	resp, _ = http.Get(ts.URL + "/projects/test-proj/status")
+	json.NewDecoder(resp.Body).Decode(&p)
+	if p.Status != "running" {
+		t.Errorf("Status = %q, want running", p.Status)
+	}
+
+	// Stop.
+	resp, _ = http.Post(ts.URL+"/projects/test-proj/stop", "application/json", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /projects/test-proj/stop status = %d", resp.StatusCode)
+	}
+
+	// Delete.
+	req, _ := http.NewRequest("DELETE", ts.URL+"/projects/test-proj", nil)
+	resp, _ = http.DefaultClient.Do(req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE /projects/test-proj status = %d", resp.StatusCode)
 	}
 }

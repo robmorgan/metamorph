@@ -14,16 +14,16 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show the status of running agents",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectDir, err := resolveProjectDir()
+		projectName, err := resolveProjectName(cmd)
 		if err != nil {
 			return err
 		}
 
 		jsonOutput, _ := cmd.Flags().GetBool("json")
 
-		state, err := daemon.GetStatus(projectDir)
+		state, err := daemon.GetStatus(projectName)
 		if err != nil {
-			if !daemon.IsRunning(projectDir) {
+			if !daemon.IsRunning() {
 				fmt.Println("Daemon is not running.")
 				return nil
 			}

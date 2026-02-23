@@ -1,9 +1,10 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"path/filepath"
 
+	"github.com/robmorgan/metamorph/internal/broker"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/daemon"
 	"github.com/robmorgan/metamorph/internal/gitops"
@@ -12,45 +13,55 @@ import (
 
 var stopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "Stop the metamorph daemon and agents",
+	Short: "Stop agents for the current project",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectDir, err := resolveProjectDir()
+		projectName, cfg, err := resolveProject(cmd)
 		if err != nil {
 			return err
 		}
 
-		if !daemon.IsRunning(projectDir) {
+		if !daemon.IsRunning() {
 			return fmt.Errorf("daemon is not running")
 		}
 
 		// Read state for summary before stopping.
-		state, err := daemon.GetStatus(projectDir)
+		state, err := daemon.GetStatus(projectName)
 		if err != nil {
-			fmt.Println("Warning: could not read daemon state")
+			fmt.Println("Warning: could not read project state")
 		}
 
-		fmt.Println("Stopping metamorph daemon...")
+		// Set project status to "stopped" in broker DB.
+		dbPath := constants.BrokerDBPath()
+		store, err := broker.NewSQLiteStore(dbPath)
+		if err != nil {
+			return fmt.Errorf("failed to open broker database: %w", err)
+		}
+		defer store.Close()
 
-		if err := daemon.Stop(projectDir); err != nil {
-			return fmt.Errorf("failed to stop daemon: %w", err)
+		ctx := context.Background()
+		if err := store.UpdateProjectStatus(ctx, projectName, "stopped"); err != nil {
+			return fmt.Errorf("failed to update project status: %w", err)
 		}
 
-		// Sync upstream to working copy (still needed for task file reading).
-		upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
-		workingCopyPath := filepath.Join(projectDir, ".metamorph", "work")
+		fmt.Printf("Stopping agents for %q...\n", projectName)
+
+		// Sync agent commits to user's project.
+		upstreamPath := constants.UpstreamRepoPath(projectName)
+		repoPath := cfg.Repos[0].Path
+
+		workingCopyPath := constants.WorkDir(projectName)
 		if _, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath); err != nil {
 			fmt.Printf("Warning: failed to sync working copy: %v\n", err)
 		}
 
-		// Sync agent commits to user's project.
-		summary, err := gitops.SyncToProjectDir(upstreamPath, projectDir)
+		summary, err := gitops.SyncToProjectDir(upstreamPath, repoPath)
 		if err != nil {
 			fmt.Printf("Warning: failed to sync to project: %v\n", err)
 		} else if summary != "" {
 			fmt.Printf("\nSynced commits:\n%s\n", summary)
 		}
 
-		fmt.Println("\nDaemon stopped.")
+		fmt.Println("\nAgents stopped.")
 
 		if state != nil {
 			fmt.Printf("\nSession summary:\n")

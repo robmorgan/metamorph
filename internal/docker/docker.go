@@ -49,6 +49,8 @@ type AgentOpts struct {
 	GitAuthorName  string // Git author name for commits (optional)
 	GitAuthorEmail string // Git author email for commits (optional)
 	BrokerURL      string // Task broker URL (optional)
+	UpstreamPath   string // Path to the upstream bare repo (if set, overrides default)
+	LogDir         string // Path to the agent log directory (if set, overrides default)
 }
 
 // AgentInfo describes a running agent container.
@@ -115,7 +117,7 @@ func newClientWithAPI(projectName string, api dockerAPI) *Client {
 // BuildImage writes the embedded Dockerfile and entrypoint into .metamorph/docker/,
 // creates a tar build context, and builds the image.
 func (c *Client) BuildImage(projectDir string, extraPackages []string) error {
-	buildDir := filepath.Join(projectDir, constants.DockerDir)
+	buildDir := filepath.Join(constants.GlobalDir(), constants.DockerDir)
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
 		return fmt.Errorf("docker: failed to create build dir: %w", err)
 	}
@@ -191,7 +193,11 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 	_ = c.cli.ContainerStop(ctx, containerName, container.StopOptions{})
 	_ = c.cli.ContainerRemove(ctx, containerName, container.RemoveOptions{})
 
-	upstreamAbs, err := filepath.Abs(filepath.Join(opts.ProjectDir, constants.UpstreamDir))
+	upstreamSource := opts.UpstreamPath
+	if upstreamSource == "" {
+		upstreamSource = filepath.Join(opts.ProjectDir, ".metamorph", "upstream.git")
+	}
+	upstreamAbs, err := filepath.Abs(upstreamSource)
 	if err != nil {
 		return "", fmt.Errorf("docker: failed to resolve upstream path: %w", err)
 	}
@@ -204,8 +210,11 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 		return "", fmt.Errorf("docker: %s not found in project directory (run 'metamorph init' first)", constants.AgentPromptFile)
 	}
 
-	logDir := filepath.Join(opts.ProjectDir, constants.AgentLogDir, fmt.Sprintf("agent-%d", opts.AgentID))
-	logDirAbs, err := filepath.Abs(logDir)
+	logDirSource := opts.LogDir
+	if logDirSource == "" {
+		logDirSource = filepath.Join(opts.ProjectDir, constants.AgentLogDir, fmt.Sprintf("agent-%d", opts.AgentID))
+	}
+	logDirAbs, err := filepath.Abs(logDirSource)
 	if err != nil {
 		return "", fmt.Errorf("docker: failed to resolve log dir: %w", err)
 	}

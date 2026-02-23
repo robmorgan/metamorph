@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -20,14 +19,14 @@ var tasksCmd = &cobra.Command{
 	Use:   "tasks",
 	Short: "Manage and view agent tasks",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectDir, err := resolveProjectDir()
+		projectName, err := resolveProjectName(cmd)
 		if err != nil {
 			return err
 		}
 
 		// Sync to working copy first so we can read task files.
-		upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
-		workingCopyPath := filepath.Join(projectDir, ".metamorph", "work")
+		upstreamPath := constants.UpstreamRepoPath(projectName)
+		workingCopyPath := constants.WorkDir(projectName)
 		if _, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath); err != nil {
 			return fmt.Errorf("failed to sync working copy: %w", err)
 		}

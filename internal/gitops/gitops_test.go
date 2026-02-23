@@ -39,10 +39,10 @@ func setupUpstream(t *testing.T) (projectDir, upstreamPath string) {
 	t.Helper()
 	projectDir = t.TempDir()
 	initGitRepo(t, projectDir)
-	if err := InitUpstream(projectDir); err != nil {
+	upstreamPath = filepath.Join(t.TempDir(), "upstream.git")
+	if err := InitUpstream(projectDir, upstreamPath); err != nil {
 		t.Fatalf("InitUpstream: %v", err)
 	}
-	upstreamPath = filepath.Join(projectDir, constants.UpstreamDir)
 	return projectDir, upstreamPath
 }
 
@@ -50,12 +50,11 @@ func TestInitUpstream(t *testing.T) {
 	t.Run("creates bare repo with seed files", func(t *testing.T) {
 		projectDir := t.TempDir()
 		initGitRepo(t, projectDir)
+		upstreamPath := filepath.Join(t.TempDir(), "upstream.git")
 
-		if err := InitUpstream(projectDir); err != nil {
+		if err := InitUpstream(projectDir, upstreamPath); err != nil {
 			t.Fatalf("InitUpstream: %v", err)
 		}
-
-		upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
 
 		// Verify the bare repo exists (HEAD file is a marker of a git repo).
 		if _, err := os.Stat(filepath.Join(upstreamPath, "HEAD")); err != nil {
@@ -119,11 +118,11 @@ func TestInitUpstream(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := InitUpstream(projectDir); err != nil {
+		upstreamPath := filepath.Join(t.TempDir(), "upstream.git")
+		if err := InitUpstream(projectDir, upstreamPath); err != nil {
 			t.Fatalf("InitUpstream: %v", err)
 		}
 
-		upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
 		cloneDir := filepath.Join(t.TempDir(), "verify")
 		if _, err := git(t.TempDir(), "clone", upstreamPath, cloneDir); err != nil {
 			t.Fatalf("clone for verification: %v", err)
@@ -142,12 +141,11 @@ func TestInitUpstream(t *testing.T) {
 	t.Run("bare repo has expected refs", func(t *testing.T) {
 		projectDir := t.TempDir()
 		initGitRepo(t, projectDir)
+		upstreamPath := filepath.Join(t.TempDir(), "upstream.git")
 
-		if err := InitUpstream(projectDir); err != nil {
+		if err := InitUpstream(projectDir, upstreamPath); err != nil {
 			t.Fatalf("InitUpstream: %v", err)
 		}
-
-		upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
 
 		// Verify refs exist (bare repo should have at least one ref).
 		refs, err := git(upstreamPath, "show-ref")
@@ -174,11 +172,11 @@ func TestInitUpstream(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := InitUpstream(projectDir); err != nil {
+		upstreamPath := filepath.Join(t.TempDir(), "upstream.git")
+		if err := InitUpstream(projectDir, upstreamPath); err != nil {
 			t.Fatalf("InitUpstream: %v", err)
 		}
 
-		upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
 		cloneDir := filepath.Join(t.TempDir(), "verify")
 		if _, err := git(t.TempDir(), "clone", upstreamPath, cloneDir); err != nil {
 			t.Fatal(err)
@@ -198,19 +196,21 @@ func TestInitUpstream(t *testing.T) {
 
 		// Verify the file is present.
 		if _, err := os.Stat(filepath.Join(cloneDir, "extra.txt")); err != nil {
-			t.Error("extra.txt not found — user's files should be in upstream")
+			t.Error("extra.txt not found -- user's files should be in upstream")
 		}
 	})
 
-	t.Run("fails on invalid project dir", func(t *testing.T) {
-		err := InitUpstream("/nonexistent/path/that/does/not/exist")
+	t.Run("fails on invalid source dir", func(t *testing.T) {
+		upstreamPath := filepath.Join(t.TempDir(), "upstream.git")
+		err := InitUpstream("/nonexistent/path/that/does/not/exist", upstreamPath)
 		if err == nil {
 			t.Fatal("expected error for invalid path")
 		}
 	})
 
 	t.Run("error includes context", func(t *testing.T) {
-		err := InitUpstream("/nonexistent/path")
+		upstreamPath := filepath.Join(t.TempDir(), "upstream.git")
+		err := InitUpstream("/nonexistent/path", upstreamPath)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -337,7 +337,7 @@ func TestSyncToWorkingCopy(t *testing.T) {
 			t.Fatalf("initial sync: %v", err)
 		}
 
-		// Second sync — no changes.
+		// Second sync -- no changes.
 		summary, err := SyncToWorkingCopy(upstreamPath, wcPath)
 		if err != nil {
 			t.Fatalf("second sync: %v", err)
@@ -472,21 +472,19 @@ func TestCloneForAgent_ConfigErrors(t *testing.T) {
 }
 
 func TestInitUpstream_GitCloneFailure(t *testing.T) {
-	// Create projectDir where upstream.git already exists as a file,
+	// Create projectDir with git repo, then create the upstream path as a file
 	// so "git clone --bare" fails.
 	projectDir := t.TempDir()
 	initGitRepo(t, projectDir)
 
-	metaDir := filepath.Join(projectDir, ".metamorph")
-	if err := os.MkdirAll(metaDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	// Create upstream.git as a regular file — git clone --bare will fail.
-	if err := os.WriteFile(filepath.Join(metaDir, "upstream.git"), []byte("not a repo"), 0644); err != nil {
+	upstreamDir := t.TempDir()
+	upstreamPath := filepath.Join(upstreamDir, "upstream.git")
+	// Create upstream.git as a regular file -- git clone --bare will fail.
+	if err := os.WriteFile(upstreamPath, []byte("not a repo"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	err := InitUpstream(projectDir)
+	err := InitUpstream(projectDir, upstreamPath)
 	if err == nil {
 		t.Fatal("expected error when upstream.git is a file")
 	}
@@ -526,7 +524,7 @@ func TestSyncToWorkingCopy_MkdirAllFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(readonlyDir, 0755) })
 
-	// wcPath = readonly/sub/wc → parent = readonly/sub → MkdirAll fails.
+	// wcPath = readonly/sub/wc -> parent = readonly/sub -> MkdirAll fails.
 	wcPath := filepath.Join(readonlyDir, "sub", "wc")
 
 	_, err := SyncToWorkingCopy("/some/upstream", wcPath)
@@ -632,7 +630,7 @@ func TestSyncToProjectDir(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Second sync — should only include the new commit.
+		// Second sync -- should only include the new commit.
 		summary2, err := SyncToProjectDir(upstreamPath, projectDir)
 		if err != nil {
 			t.Fatalf("second sync: %v", err)
@@ -653,7 +651,7 @@ func TestSyncToProjectDir(t *testing.T) {
 			t.Fatalf("initial SyncToProjectDir: %v", err)
 		}
 
-		// Second sync — should be a no-op.
+		// Second sync -- should be a no-op.
 		summary, err := SyncToProjectDir(upstreamPath, projectDir)
 		if err != nil {
 			t.Fatalf("SyncToProjectDir: %v", err)

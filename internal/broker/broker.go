@@ -27,24 +27,9 @@ func New(store Store) *Broker {
 // Start begins serving the broker API on the given address (e.g. ":8377").
 // It returns immediately; call Shutdown to stop.
 func (b *Broker) Start(addr string) error {
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /tasks", b.handleListTasks)
-	mux.HandleFunc("POST /tasks", b.handleCreateTask)
-	mux.HandleFunc("GET /tasks/{id}", b.handleGetTask)
-	mux.HandleFunc("PATCH /tasks/{id}", b.handleUpdateTask)
-	mux.HandleFunc("POST /tasks/{id}/claim", b.handleClaimTask)
-	mux.HandleFunc("POST /tasks/{id}/release", b.handleReleaseTask)
-	mux.HandleFunc("POST /tasks/{id}/complete", b.handleCompleteTask)
-
-	mux.HandleFunc("GET /messages", b.handleListMessages)
-	mux.HandleFunc("POST /messages", b.handlePostMessage)
-
-	mux.HandleFunc("GET /health", b.handleHealth)
-
 	b.server = &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      b.buildMux(),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
@@ -74,8 +59,18 @@ func (b *Broker) Shutdown(ctx context.Context) error {
 
 // Handler returns the HTTP handler for testing without starting a server.
 func (b *Broker) Handler() http.Handler {
+	return b.buildMux()
+}
+
+// Store returns the underlying Store for direct access (e.g. project resolution).
+func (b *Broker) Store() Store {
+	return b.store
+}
+
+func (b *Broker) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
+	// Task endpoints.
 	mux.HandleFunc("GET /tasks", b.handleListTasks)
 	mux.HandleFunc("POST /tasks", b.handleCreateTask)
 	mux.HandleFunc("GET /tasks/{id}", b.handleGetTask)
@@ -84,15 +79,25 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("POST /tasks/{id}/release", b.handleReleaseTask)
 	mux.HandleFunc("POST /tasks/{id}/complete", b.handleCompleteTask)
 
+	// Message endpoints.
 	mux.HandleFunc("GET /messages", b.handleListMessages)
 	mux.HandleFunc("POST /messages", b.handlePostMessage)
+
+	// Project endpoints.
+	mux.HandleFunc("GET /projects", b.handleListProjects)
+	mux.HandleFunc("POST /projects", b.handleRegisterProject)
+	mux.HandleFunc("GET /projects/{name}", b.handleGetProject)
+	mux.HandleFunc("DELETE /projects/{name}", b.handleUnregisterProject)
+	mux.HandleFunc("POST /projects/{name}/start", b.handleStartProject)
+	mux.HandleFunc("POST /projects/{name}/stop", b.handleStopProject)
+	mux.HandleFunc("GET /projects/{name}/status", b.handleProjectStatus)
 
 	mux.HandleFunc("GET /health", b.handleHealth)
 
 	return mux
 }
 
-// --- Handlers ---
+// --- Task Handlers ---
 
 func (b *Broker) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -102,6 +107,7 @@ func (b *Broker) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	filter := TaskFilter{
 		Status:       r.URL.Query().Get("status"),
 		RoleAffinity: r.URL.Query().Get("role"),
+		Project:      r.URL.Query().Get("project"),
 	}
 
 	b.mu.Lock()
@@ -142,6 +148,7 @@ type createTaskRequest struct {
 	Description  string   `json:"description"`
 	Priority     int      `json:"priority"`
 	RoleAffinity string   `json:"role_affinity"`
+	Project      string   `json:"project"`
 	DependsOn    []string `json:"depends_on"`
 }
 
@@ -168,6 +175,7 @@ func (b *Broker) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		Status:       "open",
 		Priority:     req.Priority,
 		RoleAffinity: req.RoleAffinity,
+		Project:      req.Project,
 		DependsOn:    req.DependsOn,
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -296,10 +304,13 @@ func (b *Broker) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+// --- Message Handlers ---
+
 type postMessageRequest struct {
 	FromAgent int    `json:"from_agent"`
 	TaskID    string `json:"task_id"`
 	Text      string `json:"text"`
+	Project   string `json:"project"`
 }
 
 func (b *Broker) handlePostMessage(w http.ResponseWriter, r *http.Request) {
@@ -321,6 +332,7 @@ func (b *Broker) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		FromAgent: req.FromAgent,
 		TaskID:    req.TaskID,
 		Text:      req.Text,
+		Project:   req.Project,
 	}
 
 	b.mu.Lock()
@@ -337,6 +349,7 @@ func (b *Broker) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 
 func (b *Broker) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	sinceStr := r.URL.Query().Get("since")
+	project := r.URL.Query().Get("project")
 	var since time.Time
 	if sinceStr != "" {
 		var err error
@@ -348,7 +361,7 @@ func (b *Broker) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	b.mu.Lock()
-	msgs, err := b.store.ListMessages(r.Context(), since)
+	msgs, err := b.store.ListMessages(r.Context(), since, project)
 	b.mu.Unlock()
 
 	if err != nil {
@@ -359,6 +372,141 @@ func (b *Broker) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		msgs = []Message{}
 	}
 	writeJSON(w, http.StatusOK, msgs)
+}
+
+// --- Project Handlers ---
+
+func (b *Broker) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	b.mu.Lock()
+	projects, err := b.store.ListProjects(r.Context())
+	b.mu.Unlock()
+
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if projects == nil {
+		projects = []ProjectInfo{}
+	}
+	writeJSON(w, http.StatusOK, projects)
+}
+
+type registerProjectRequest struct {
+	Name     string `json:"name"`
+	RepoPath string `json:"repo_path"`
+	Label    string `json:"label"`
+}
+
+func (b *Broker) handleRegisterProject(w http.ResponseWriter, r *http.Request) {
+	var req registerProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+		return
+	}
+	if req.Name == "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("name is required"))
+		return
+	}
+
+	b.mu.Lock()
+	err := b.store.RegisterProject(r.Context(), req.Name)
+	if err == nil && req.RepoPath != "" {
+		err = b.store.AddProjectRepo(r.Context(), req.Name, req.RepoPath, req.Label)
+	}
+	b.mu.Unlock()
+
+	if err != nil {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "registered"})
+}
+
+func (b *Broker) handleGetProject(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	b.mu.Lock()
+	project, err := b.store.GetProject(r.Context(), name)
+	b.mu.Unlock()
+
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeErr(w, http.StatusNotFound, err)
+		} else {
+			writeErr(w, http.StatusInternalServerError, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, project)
+}
+
+func (b *Broker) handleUnregisterProject(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	b.mu.Lock()
+	err := b.store.UnregisterProject(r.Context(), name)
+	b.mu.Unlock()
+
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "unregistered"})
+}
+
+func (b *Broker) handleStartProject(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	b.mu.Lock()
+	err := b.store.UpdateProjectStatus(r.Context(), name, "running")
+	b.mu.Unlock()
+
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeErr(w, http.StatusNotFound, err)
+		} else {
+			writeErr(w, http.StatusInternalServerError, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+}
+
+func (b *Broker) handleStopProject(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	b.mu.Lock()
+	err := b.store.UpdateProjectStatus(r.Context(), name, "stopped")
+	b.mu.Unlock()
+
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeErr(w, http.StatusNotFound, err)
+		} else {
+			writeErr(w, http.StatusInternalServerError, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+func (b *Broker) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	b.mu.Lock()
+	project, err := b.store.GetProject(r.Context(), name)
+	b.mu.Unlock()
+
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeErr(w, http.StatusNotFound, err)
+		} else {
+			writeErr(w, http.StatusInternalServerError, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, project)
 }
 
 // --- Helpers ---

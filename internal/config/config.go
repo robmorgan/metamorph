@@ -1,60 +1,69 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
-	"github.com/BurntSushi/toml"
 	"github.com/robmorgan/metamorph/internal/constants"
 )
 
+// RepoConfig describes a source repository associated with a project.
+type RepoConfig struct {
+	Path  string `json:"path"`
+	Label string `json:"label,omitempty"`
+}
+
+// Config holds per-project configuration from ~/.metamorph/projects/{name}/config.json.
 type Config struct {
-	Project       ProjectConfig       `toml:"project"`
-	Agents        AgentsConfig        `toml:"agents"`
-	Docker        DockerConfig        `toml:"docker"`
-	Testing       TestingConfig       `toml:"testing"`
-	Notifications NotificationsConfig `toml:"notifications"`
-	Git           GitConfig           `toml:"git"`
-	Broker        BrokerConfig        `toml:"broker"`
+	Project       ProjectConfig       `json:"project"`
+	Repos         []RepoConfig        `json:"repos,omitempty"`
+	Agents        AgentsConfig        `json:"agents"`
+	Docker        DockerConfig        `json:"docker"`
+	Testing       TestingConfig       `json:"testing"`
+	Notifications NotificationsConfig `json:"notifications"`
+	Git           GitConfig           `json:"git"`
+	Broker        BrokerConfig        `json:"broker"`
 }
 
 type ProjectConfig struct {
-	Name        string `toml:"name"`
-	Description string `toml:"description"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 type AgentsConfig struct {
-	Count int      `toml:"count"`
-	Model string   `toml:"model"`
-	Roles []string `toml:"roles"`
+	Count int      `json:"count"`
+	Model string   `json:"model"`
+	Roles []string `json:"roles"`
 }
 
 type DockerConfig struct {
-	Image         string   `toml:"image"`
-	ExtraPackages []string `toml:"extra_packages"`
+	Image         string   `json:"image"`
+	ExtraPackages []string `json:"extra_packages"`
 }
 
 type TestingConfig struct {
-	Command     string `toml:"command"`
-	FastCommand string `toml:"fast_command"`
+	Command     string `json:"command"`
+	FastCommand string `json:"fast_command"`
 }
 
 type NotificationsConfig struct {
-	WebhookURL string `toml:"webhook_url"`
+	WebhookURL string `json:"webhook_url"`
 }
 
 type GitConfig struct {
-	AuthorName  string `toml:"author_name"`
-	AuthorEmail string `toml:"author_email"`
+	AuthorName  string `json:"author_name"`
+	AuthorEmail string `json:"author_email"`
 }
 
 type BrokerConfig struct {
-	Port int `toml:"port"`
+	Port int `json:"port"`
 }
 
-// Load reads a TOML config file from path and validates it.
+// Load reads a JSON config file from path and validates it.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -62,7 +71,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
@@ -73,6 +82,30 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// LoadProject loads the config for a named project from the global directory.
+func LoadProject(projectName string) (*Config, error) {
+	path := filepath.Join(constants.ProjectDir(projectName), constants.ProjectConfigFile)
+	return Load(path)
+}
+
+// Save writes the config as JSON to the given path.
+func Save(cfg *Config, path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+
+	return nil
 }
 
 // applyDefaults fills in default values for optional fields.

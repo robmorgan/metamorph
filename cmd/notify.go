@@ -17,18 +17,13 @@ var notifyCmd = &cobra.Command{
 			return cmd.Help()
 		}
 
-		projectDir, err := resolveProjectDir()
-		if err != nil {
-			return err
-		}
-
-		cfg, err := loadConfig(projectDir)
+		_, cfg, err := resolveProject(cmd)
 		if err != nil {
 			return err
 		}
 
 		if cfg.Notifications.WebhookURL == "" {
-			return fmt.Errorf("no webhook URL configured in metamorph.toml ([notifications] webhook_url)")
+			return fmt.Errorf("no webhook URL configured (set notifications.webhook_url in config.json)")
 		}
 
 		event := notify.Event{

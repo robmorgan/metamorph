@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,65 +10,103 @@ import (
 	"testing"
 	"time"
 
+	"github.com/robmorgan/metamorph/internal/broker"
+	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 )
 
-// testProject creates a temp dir with a valid metamorph.toml, AGENT_PROMPT.md,
-// and supporting files. Returns the project dir path.
-func testProject(t *testing.T) string {
+// setupTestHome overrides HOME so all ~/.metamorph/ paths resolve to a temp dir.
+func setupTestHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-
-	configContent := `[project]
-name = "test-proj"
-description = "Test project"
-
-[agents]
-count = 2
-model = "claude-sonnet"
-roles = ["developer", "tester"]
-
-[docker]
-image = "metamorph-agent:latest"
-
-[testing]
-command = "go test ./..."
-
-[notifications]
-webhook_url = ""
-`
-	if err := os.WriteFile(filepath.Join(dir, "metamorph.toml"), []byte(configContent), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, constants.AgentPromptFile), []byte("# Test Agent Prompt\nHello ${AGENT_ID}"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, constants.ProgressFile), []byte("# Progress\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.MkdirAll(filepath.Join(dir, constants.TaskLockDir), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(dir, constants.AgentLogDir), 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(".metamorph/\nagent_logs/\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
+	t.Setenv("HOME", dir)
 	return dir
 }
 
+// testProject creates a temp dir with a valid project config registered in the
+// global ~/.metamorph/ directory. Returns the repo dir path.
+func testProject(t *testing.T) string {
+	t.Helper()
+	home := setupTestHome(t)
+	repoDir := filepath.Join(t.TempDir(), "test-proj")
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	projectName := "test-proj"
+
+	// Write project config under ~/.metamorph/projects/test-proj/.
+	projectDir := filepath.Join(home, constants.GlobalDirName, constants.ProjectsDir, projectName)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Project: config.ProjectConfig{
+			Name:        projectName,
+			Description: "Test project",
+		},
+		Repos: []config.RepoConfig{
+			{Path: repoDir},
+		},
+		Agents: config.AgentsConfig{
+			Count: 2,
+			Model: "claude-sonnet",
+			Roles: []string{"developer", "tester"},
+		},
+		Docker: config.DockerConfig{
+			Image: "metamorph-agent:latest",
+		},
+		Testing: config.TestingConfig{
+			Command: "go test ./...",
+		},
+	}
+	configPath := filepath.Join(projectDir, constants.ProjectConfigFile)
+	if err := config.Save(cfg, configPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write files in the repo dir.
+	if err := os.WriteFile(filepath.Join(repoDir, constants.AgentPromptFile), []byte("# Test Agent Prompt\nHello ${AGENT_ID}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, constants.ProgressFile), []byte("# Progress\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoDir, constants.TaskLockDir), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".gitignore"), []byte("current_tasks/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Register project in broker DB.
+	dbPath := filepath.Join(home, constants.GlobalDirName, constants.BrokerDBFile)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := broker.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.RegisterProject(ctx, projectName); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddProjectRepo(ctx, projectName, repoDir, ""); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	return repoDir
+}
+
 // testProjectWithUpstream creates a testProject, initializes it as a git repo
-// with an initial commit, then clones it as a bare upstream repo — matching
-// the real InitUpstream behavior (shared history).
+// with an initial commit, then clones it as a bare upstream repo.
 func testProjectWithUpstream(t *testing.T) string {
 	t.Helper()
 	dir := testProject(t)
+	projectName := "test-proj"
 
 	// Initialize the project dir as a git repo with an initial commit.
 	gitExec(t, dir, "init")
@@ -76,8 +115,8 @@ func testProjectWithUpstream(t *testing.T) string {
 	gitExec(t, dir, "add", ".")
 	gitExec(t, dir, "commit", "-m", "initial commit")
 
-	// Clone the project as a bare upstream repo (shared history).
-	upstreamPath := filepath.Join(dir, constants.UpstreamDir)
+	// Clone the project as a bare upstream repo.
+	upstreamPath := constants.UpstreamRepoPath(projectName)
 	if err := os.MkdirAll(filepath.Dir(upstreamPath), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +143,7 @@ func testProjectWithUpstream(t *testing.T) string {
 	}
 
 	if needsCommit {
-		gitExec(t, cloneDir, "add", ".")
+		gitExec(t, cloneDir, "add", "-f", ".")
 		gitExec(t, cloneDir, "commit", "-m", "seed scaffold files")
 		branch := gitOutput(t, cloneDir, "rev-parse", "--abbrev-ref", "HEAD")
 		gitExec(t, cloneDir, "push", "origin", branch)
@@ -138,6 +177,7 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 }
 
 func TestInitCreatesAllFiles(t *testing.T) {
+	home := setupTestHome(t)
 	dir := filepath.Join(t.TempDir(), "new-project")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
@@ -145,7 +185,6 @@ func TestInitCreatesAllFiles(t *testing.T) {
 	gitExec(t, dir, "init")
 	gitExec(t, dir, "config", "user.name", "test")
 	gitExec(t, dir, "config", "user.email", "test@test")
-	// Create a dummy file so we can make an initial commit.
 	if err := os.WriteFile(filepath.Join(dir, ".gitkeep"), []byte(""), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -157,9 +196,16 @@ func TestInitCreatesAllFiles(t *testing.T) {
 		t.Fatalf("init: %v", err)
 	}
 
-	// Check files.
+	projectName := filepath.Base(dir)
+
+	// Check project config.
+	configPath := filepath.Join(home, constants.GlobalDirName, constants.ProjectsDir, projectName, constants.ProjectConfigFile)
+	if _, err := os.Stat(configPath); err != nil {
+		t.Errorf("expected config.json to exist at %s: %v", configPath, err)
+	}
+
+	// Check files in repo dir.
 	for _, f := range []string{
-		"metamorph.toml",
 		constants.AgentPromptFile,
 		constants.ProgressFile,
 		".gitignore",
@@ -170,32 +216,24 @@ func TestInitCreatesAllFiles(t *testing.T) {
 	}
 
 	// Check directories.
-	for _, d := range []string{
-		constants.TaskLockDir,
-		constants.AgentLogDir,
-	} {
-		info, err := os.Stat(filepath.Join(dir, d))
-		if err != nil {
-			t.Errorf("expected %s to exist: %v", d, err)
-			continue
-		}
-		if !info.IsDir() {
-			t.Errorf("expected %s to be a directory", d)
-		}
+	info, err := os.Stat(filepath.Join(dir, constants.TaskLockDir))
+	if err != nil {
+		t.Errorf("expected %s to exist: %v", constants.TaskLockDir, err)
+	} else if !info.IsDir() {
+		t.Errorf("expected %s to be a directory", constants.TaskLockDir)
 	}
 
 	// Verify config content.
-	data, err := os.ReadFile(filepath.Join(dir, "metamorph.toml"))
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
 	content := string(data)
-	projectName := filepath.Base(dir)
 	if !strings.Contains(content, projectName) {
 		t.Errorf("config should contain project name %q", projectName)
 	}
-	if !strings.Contains(content, "count = 4") {
-		t.Error("config should have default count = 4")
+	if !strings.Contains(content, `"count": 4`) {
+		t.Error("config should have default count 4")
 	}
 
 	// Verify AGENT_PROMPT.md has skeleton template content.
@@ -210,9 +248,25 @@ func TestInitCreatesAllFiles(t *testing.T) {
 	if !strings.Contains(promptContent, "## Build & Test") {
 		t.Error("AGENT_PROMPT.md should contain Build & Test section")
 	}
+
+	// Verify project registered in broker DB.
+	dbPath := filepath.Join(home, constants.GlobalDirName, constants.BrokerDBFile)
+	store, err := broker.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("open broker db: %v", err)
+	}
+	defer store.Close()
+	foundName, err := store.GetProjectByRepoPath(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("project not registered in DB: %v", err)
+	}
+	if foundName != projectName {
+		t.Errorf("expected project name %q, got %q", projectName, foundName)
+	}
 }
 
 func TestInitPreservesExistingPrompt(t *testing.T) {
+	setupTestHome(t)
 	dir := filepath.Join(t.TempDir(), "existing-project")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
@@ -246,12 +300,29 @@ func TestInitPreservesExistingPrompt(t *testing.T) {
 }
 
 func TestInitRejectsExistingProject(t *testing.T) {
-	dir := testProject(t)
+	home := setupTestHome(t)
+	dir := filepath.Join(t.TempDir(), "dup-project")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	gitExec(t, dir, "init")
 	gitExec(t, dir, "config", "user.name", "test")
 	gitExec(t, dir, "config", "user.email", "test@test")
+	if err := os.WriteFile(filepath.Join(dir, ".gitkeep"), []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
 	gitExec(t, dir, "add", ".")
 	gitExec(t, dir, "commit", "-m", "initial commit")
+
+	// Pre-create project config to simulate existing project.
+	projectName := filepath.Base(dir)
+	projectDir := filepath.Join(home, constants.GlobalDirName, constants.ProjectsDir, projectName)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, constants.ProjectConfigFile), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	rootCmd.SetArgs([]string{"init", dir})
 	err := rootCmd.Execute()
@@ -271,6 +342,13 @@ func TestStatusWithoutDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.Chdir(oldWd) }()
+
+	// Need a git repo for CWD resolution.
+	gitExec(t, dir, "init")
+	gitExec(t, dir, "config", "user.name", "test")
+	gitExec(t, dir, "config", "user.email", "test@test")
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "initial commit")
 
 	// Capture stdout.
 	old := os.Stdout
@@ -338,6 +416,13 @@ func TestPromptShow(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(oldWd) }()
 
+	// Need a git repo for CWD resolution.
+	gitExec(t, dir, "init")
+	gitExec(t, dir, "config", "user.name", "test")
+	gitExec(t, dir, "config", "user.email", "test@test")
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "initial commit")
+
 	// Capture stdout.
 	old := os.Stdout
 	r, w, _ := os.Pipe()
@@ -371,7 +456,6 @@ func TestStartDryRun(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(oldWd) }()
 
-	// Set a dummy API key so the command doesn't fail on that.
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
 
 	// Capture stdout.
@@ -445,7 +529,7 @@ func TestStartCreatesUpstream(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
 
 	// Verify upstream doesn't exist yet.
-	upstreamPath := filepath.Join(dir, constants.UpstreamDir)
+	upstreamPath := constants.UpstreamRepoPath("test-proj")
 	if _, err := os.Stat(upstreamPath); err == nil {
 		t.Fatal("upstream should not exist before start")
 	}

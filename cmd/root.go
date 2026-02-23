@@ -1,13 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/robmorgan/metamorph/internal/broker"
 	"github.com/robmorgan/metamorph/internal/config"
+	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +35,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose (debug) logging")
+	rootCmd.PersistentFlags().String("project", "", "Project name (overrides CWD detection)")
 }
 
 func Execute() {
@@ -41,23 +45,96 @@ func Execute() {
 	}
 }
 
-// resolveProjectDir returns the current working directory and checks for metamorph.toml.
-func resolveProjectDir() (string, error) {
-	dir, err := os.Getwd()
+// resolveProject resolves the current project by name or CWD and loads its config.
+func resolveProject(cmd *cobra.Command) (string, *config.Config, error) {
+	// 1. Check --project flag.
+	if name, _ := cmd.Flags().GetString("project"); name != "" {
+		cfg, err := config.LoadProject(name)
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to load project %q: %w", name, err)
+		}
+		return name, cfg, nil
+	}
+
+	// 2. Find git repo root from CWD.
+	repoRoot, err := findGitRoot()
 	if err != nil {
-		return "", fmt.Errorf("failed to get working directory: %w", err)
+		return "", nil, fmt.Errorf("not in a git repository (run 'git init' first)")
 	}
 
-	if _, err := os.Stat(filepath.Join(dir, "metamorph.toml")); err != nil {
-		return "", fmt.Errorf("not a metamorph project (metamorph.toml not found in %s)", dir)
+	// 3. Query SQLite for project name from repo path.
+	dbPath := constants.BrokerDBPath()
+	store, err := broker.NewSQLiteStore(dbPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("metamorph not initialized (run 'metamorph init' first)")
+	}
+	defer store.Close()
+
+	name, err := store.GetProjectByRepoPath(context.Background(), repoRoot)
+	if err != nil {
+		return "", nil, fmt.Errorf("not a registered project. Run 'metamorph init' first.")
 	}
 
-	return dir, nil
+	// 4. Load config.
+	cfg, err := config.LoadProject(name)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to load project config: %w", err)
+	}
+
+	return name, cfg, nil
 }
 
-// loadConfig loads the metamorph.toml configuration from the given directory.
-func loadConfig(dir string) (*config.Config, error) {
-	return config.Load(filepath.Join(dir, "metamorph.toml"))
+// resolveProjectName resolves just the project name (without loading config).
+func resolveProjectName(cmd *cobra.Command) (string, error) {
+	if name, _ := cmd.Flags().GetString("project"); name != "" {
+		return name, nil
+	}
+
+	repoRoot, err := findGitRoot()
+	if err != nil {
+		return "", fmt.Errorf("not in a git repository")
+	}
+
+	dbPath := constants.BrokerDBPath()
+	store, err := broker.NewSQLiteStore(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("metamorph not initialized (run 'metamorph init' first)")
+	}
+	defer store.Close()
+
+	name, err := store.GetProjectByRepoPath(context.Background(), repoRoot)
+	if err != nil {
+		return "", fmt.Errorf("not a registered project. Run 'metamorph init' first.")
+	}
+
+	return name, nil
+}
+
+// findGitRoot walks up from CWD to find the nearest .git directory.
+func findGitRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("not in a git repository")
+		}
+		dir = parent
+	}
+}
+
+// brokerURL returns the HTTP URL for the broker API.
+func brokerURL() string {
+	cfg, err := config.LoadGlobal()
+	if err != nil {
+		return fmt.Sprintf("http://localhost:%d", constants.DefaultBrokerPort)
+	}
+	return fmt.Sprintf("http://localhost:%d", cfg.Daemon.Port)
 }
 
 // formatDuration formats seconds into a human-readable string like "2h 15m 30s".

@@ -10,7 +10,7 @@ import (
 
 func writeConfig(t *testing.T, dir, content string) string {
 	t.Helper()
-	path := filepath.Join(dir, "metamorph.toml")
+	path := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -20,191 +20,109 @@ func writeConfig(t *testing.T, dir, content string) string {
 func TestLoad(t *testing.T) {
 	tests := []struct {
 		name    string
-		toml    string
+		json    string
 		wantErr string
 	}{
 		{
 			name: "valid config",
-			toml: `
-[project]
-name = "my-app"
-description = "A test project"
-
-[agents]
-count = 3
-model = "claude-sonnet"
-roles = ["developer", "tester", "reviewer"]
-
-[docker]
-image = "ubuntu:22.04"
-
-[testing]
-command = "go test ./..."
-fast_command = "go test -short ./..."
-
-[notifications]
-webhook_url = "https://example.com/hook"
-`,
+			json: `{
+				"project": {"name": "my-app", "description": "A test project"},
+				"agents": {"count": 3, "model": "claude-sonnet", "roles": ["developer", "tester", "reviewer"]},
+				"docker": {"image": "ubuntu:22.04"},
+				"testing": {"command": "go test ./...", "fast_command": "go test -short ./..."},
+				"notifications": {"webhook_url": "https://example.com/hook"}
+			}`,
 		},
 		{
 			name: "empty project name",
-			toml: `
-[project]
-name = ""
-
-[agents]
-count = 2
-model = "claude-sonnet"
-roles = ["developer"]
-`,
+			json: `{
+				"project": {"name": ""},
+				"agents": {"count": 2, "model": "claude-sonnet", "roles": ["developer"]}
+			}`,
 			wantErr: "project.name is required",
 		},
 		{
 			name: "missing project name",
-			toml: `
-[project]
-description = "no name"
-
-[agents]
-count = 2
-model = "claude-sonnet"
-roles = ["developer"]
-`,
+			json: `{
+				"project": {"description": "no name"},
+				"agents": {"count": 2, "model": "claude-sonnet", "roles": ["developer"]}
+			}`,
 			wantErr: "project.name is required",
 		},
 		{
 			name: "zero agent count",
-			toml: `
-[project]
-name = "my-app"
-
-[agents]
-count = 0
-model = "claude-sonnet"
-roles = ["developer"]
-`,
+			json: `{
+				"project": {"name": "my-app"},
+				"agents": {"count": 0, "model": "claude-sonnet", "roles": ["developer"]}
+			}`,
 			wantErr: "agents.count must be greater than 0",
 		},
 		{
 			name: "negative agent count",
-			toml: `
-[project]
-name = "my-app"
-
-[agents]
-count = -1
-model = "claude-sonnet"
-roles = ["developer"]
-`,
+			json: `{
+				"project": {"name": "my-app"},
+				"agents": {"count": -1, "model": "claude-sonnet", "roles": ["developer"]}
+			}`,
 			wantErr: "agents.count must be greater than 0",
 		},
 		{
 			name: "empty model",
-			toml: `
-[project]
-name = "my-app"
-
-[agents]
-count = 2
-model = ""
-roles = ["developer"]
-`,
+			json: `{
+				"project": {"name": "my-app"},
+				"agents": {"count": 2, "model": "", "roles": ["developer"]}
+			}`,
 			wantErr: "agents.model is required",
 		},
 		{
 			name: "missing model",
-			toml: `
-[project]
-name = "my-app"
-
-[agents]
-count = 2
-roles = ["developer"]
-`,
+			json: `{
+				"project": {"name": "my-app"},
+				"agents": {"count": 2, "roles": ["developer"]}
+			}`,
 			wantErr: "agents.model is required",
 		},
 		{
 			name: "invalid role",
-			toml: `
-[project]
-name = "my-app"
-
-[agents]
-count = 2
-model = "claude-sonnet"
-roles = ["developer", "hacker"]
-`,
+			json: `{
+				"project": {"name": "my-app"},
+				"agents": {"count": 2, "model": "claude-sonnet", "roles": ["developer", "hacker"]}
+			}`,
 			wantErr: `invalid agent role: "hacker"`,
 		},
 		{
 			name: "all valid roles",
-			toml: `
-[project]
-name = "my-app"
-
-[agents]
-count = 6
-model = "claude-sonnet"
-roles = ["developer", "tester", "refactorer", "documenter", "optimizer", "reviewer"]
-`,
+			json: `{
+				"project": {"name": "my-app"},
+				"agents": {"count": 6, "model": "claude-sonnet", "roles": ["developer", "tester", "refactorer", "documenter", "optimizer", "reviewer"]}
+			}`,
 		},
 		{
 			name: "minimal valid config",
-			toml: `
-[project]
-name = "minimal"
-
-[agents]
-count = 1
-model = "gpt-4"
-roles = []
-`,
+			json: `{
+				"project": {"name": "minimal"},
+				"agents": {"count": 1, "model": "gpt-4", "roles": []}
+			}`,
 		},
 		{
 			name: "empty roles list is valid",
-			toml: `
-[project]
-name = "my-app"
-
-[agents]
-count = 1
-model = "claude-sonnet"
-roles = []
-`,
-		},
-		{
-			name: "extra fields ignored",
-			toml: `
-[project]
-name = "my-app"
-unknown_field = "should be ignored"
-
-[agents]
-count = 1
-model = "claude-sonnet"
-roles = []
-
-[custom_section]
-foo = "bar"
-`,
+			json: `{
+				"project": {"name": "my-app"},
+				"agents": {"count": 1, "model": "claude-sonnet", "roles": []}
+			}`,
 		},
 		{
 			name: "missing sections uses zero values",
-			toml: `
-[project]
-name = "my-app"
-
-[agents]
-count = 1
-model = "claude-sonnet"
-`,
+			json: `{
+				"project": {"name": "my-app"},
+				"agents": {"count": 1, "model": "claude-sonnet"}
+			}`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			path := writeConfig(t, dir, tt.toml)
+			path := writeConfig(t, dir, tt.json)
 
 			cfg, err := Load(path)
 
@@ -229,44 +147,30 @@ model = "claude-sonnet"
 }
 
 func TestLoad_FileNotFound(t *testing.T) {
-	_, err := Load("/nonexistent/path/metamorph.toml")
+	_, err := Load("/nonexistent/path/config.json")
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
 }
 
-func TestLoad_InvalidTOML(t *testing.T) {
+func TestLoad_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
-	path := writeConfig(t, dir, `[this is not valid toml`)
+	path := writeConfig(t, dir, `{this is not valid json`)
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected error for invalid TOML")
+		t.Fatal("expected error for invalid JSON")
 	}
 }
 
 func TestLoad_ValidConfigValues(t *testing.T) {
 	dir := t.TempDir()
-	path := writeConfig(t, dir, `
-[project]
-name = "my-project"
-description = "A test project"
-
-[agents]
-count = 3
-model = "claude-sonnet"
-roles = ["developer", "tester", "reviewer"]
-
-[docker]
-image = "custom:latest"
-extra_packages = ["curl", "jq"]
-
-[testing]
-command = "go test ./..."
-fast_command = "go test -short"
-
-[notifications]
-webhook_url = "https://hooks.example.com/test"
-`)
+	path := writeConfig(t, dir, `{
+		"project": {"name": "my-project", "description": "A test project"},
+		"agents": {"count": 3, "model": "claude-sonnet", "roles": ["developer", "tester", "reviewer"]},
+		"docker": {"image": "custom:latest", "extra_packages": ["curl", "jq"]},
+		"testing": {"command": "go test ./...", "fast_command": "go test -short"},
+		"notifications": {"webhook_url": "https://hooks.example.com/test"}
+	}`)
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -310,26 +214,20 @@ webhook_url = "https://hooks.example.com/test"
 
 func TestLoad_DefaultValues(t *testing.T) {
 	dir := t.TempDir()
-	path := writeConfig(t, dir, `
-[project]
-name = "defaults-test"
-
-[agents]
-count = 1
-model = "claude-sonnet"
-`)
+	path := writeConfig(t, dir, `{
+		"project": {"name": "defaults-test"},
+		"agents": {"count": 1, "model": "claude-sonnet"}
+	}`)
 
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	// Docker image should get default value.
 	if cfg.Docker.Image != "metamorph-agent:latest" {
 		t.Errorf("Docker.Image default = %q, want %q", cfg.Docker.Image, "metamorph-agent:latest")
 	}
 
-	// Optional fields should be zero values.
 	if cfg.Testing.Command != "" {
 		t.Errorf("Testing.Command should be empty, got %q", cfg.Testing.Command)
 	}
@@ -342,7 +240,6 @@ model = "claude-sonnet"
 }
 
 func TestApplyDefaults_GitAuthorFromHostConfig(t *testing.T) {
-	// Get the host's git config values for comparison.
 	wantName := ""
 	if out, err := exec.Command("git", "config", "user.name").Output(); err == nil {
 		wantName = strings.TrimSpace(string(out))
@@ -357,14 +254,10 @@ func TestApplyDefaults_GitAuthorFromHostConfig(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	path := writeConfig(t, dir, `
-[project]
-name = "git-defaults"
-
-[agents]
-count = 1
-model = "claude-sonnet"
-`)
+	path := writeConfig(t, dir, `{
+		"project": {"name": "git-defaults"},
+		"agents": {"count": 1, "model": "claude-sonnet"}
+	}`)
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -381,18 +274,11 @@ model = "claude-sonnet"
 
 func TestApplyDefaults_GitAuthorExplicitNotOverridden(t *testing.T) {
 	dir := t.TempDir()
-	path := writeConfig(t, dir, `
-[project]
-name = "git-explicit"
-
-[agents]
-count = 1
-model = "claude-sonnet"
-
-[git]
-author_name = "Explicit Name"
-author_email = "explicit@example.com"
-`)
+	path := writeConfig(t, dir, `{
+		"project": {"name": "git-explicit"},
+		"agents": {"count": 1, "model": "claude-sonnet"},
+		"git": {"author_name": "Explicit Name", "author_email": "explicit@example.com"}
+	}`)
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -404,5 +290,86 @@ author_email = "explicit@example.com"
 	}
 	if cfg.Git.AuthorEmail != "explicit@example.com" {
 		t.Errorf("Git.AuthorEmail = %q, want %q", cfg.Git.AuthorEmail, "explicit@example.com")
+	}
+}
+
+func TestLoad_WithRepos(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, dir, `{
+		"project": {"name": "multi-repo"},
+		"repos": [
+			{"path": "/home/user/backend", "label": "backend"},
+			{"path": "/home/user/frontend", "label": "frontend"}
+		],
+		"agents": {"count": 2, "model": "claude-sonnet"}
+	}`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if len(cfg.Repos) != 2 {
+		t.Fatalf("Repos = %v, want 2 entries", cfg.Repos)
+	}
+	if cfg.Repos[0].Path != "/home/user/backend" {
+		t.Errorf("Repos[0].Path = %q", cfg.Repos[0].Path)
+	}
+	if cfg.Repos[0].Label != "backend" {
+		t.Errorf("Repos[0].Label = %q", cfg.Repos[0].Label)
+	}
+}
+
+func TestSave(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subdir", "config.json")
+
+	cfg := &Config{
+		Project: ProjectConfig{Name: "saved-project"},
+		Agents:  AgentsConfig{Count: 2, Model: "claude-sonnet"},
+	}
+
+	if err := Save(cfg, path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after Save: %v", err)
+	}
+
+	if loaded.Project.Name != "saved-project" {
+		t.Errorf("Project.Name = %q", loaded.Project.Name)
+	}
+}
+
+func TestGlobalConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	// Load non-existent returns defaults.
+	cfg, err := LoadGlobalFrom(path)
+	if err != nil {
+		t.Fatalf("LoadGlobalFrom: %v", err)
+	}
+	if cfg.Daemon.Port != 8377 {
+		t.Errorf("Port = %d, want 8377", cfg.Daemon.Port)
+	}
+	if cfg.Defaults.Model != "claude-opus-4-6" {
+		t.Errorf("Model = %q", cfg.Defaults.Model)
+	}
+
+	// Save and reload.
+	cfg.Daemon.Port = 9999
+	if err := SaveGlobalTo(cfg, path); err != nil {
+		t.Fatalf("SaveGlobalTo: %v", err)
+	}
+
+	cfg2, err := LoadGlobalFrom(path)
+	if err != nil {
+		t.Fatalf("LoadGlobalFrom: %v", err)
+	}
+	if cfg2.Daemon.Port != 9999 {
+		t.Errorf("Port = %d after reload, want 9999", cfg2.Daemon.Port)
 	}
 }

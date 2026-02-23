@@ -108,7 +108,7 @@ var logsCmd = &cobra.Command{
 			return fmt.Errorf("invalid agent ID %q: must be a number", args[0])
 		}
 
-		projectDir, err := resolveProjectDir()
+		projectName, err := resolveProjectName(cmd)
 		if err != nil {
 			return err
 		}
@@ -116,7 +116,7 @@ var logsCmd = &cobra.Command{
 		follow, _ := cmd.Flags().GetBool("follow")
 		tail, _ := cmd.Flags().GetInt("tail")
 
-		logDir := filepath.Join(projectDir, constants.AgentLogDir, fmt.Sprintf("agent-%d", agentID))
+		logDir := filepath.Join(constants.ProjectAgentLogDir(projectName), fmt.Sprintf("agent-%d", agentID))
 
 		// Find the latest session log file.
 		logFile, err := findLatestLog(logDir)

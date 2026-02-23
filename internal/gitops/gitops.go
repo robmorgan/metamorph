@@ -26,12 +26,12 @@ func git(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// InitUpstream creates a bare git repo at <projectDir>/.metamorph/upstream.git
-// by cloning the user's project repo. This gives shared history so that
-// fetch/merge can sync agent commits back to the project.
+// InitUpstream creates a bare git repo at upstreamPath by cloning the user's
+// project repo at sourceDir. This gives shared history so that fetch/merge
+// can sync agent commits back to the project.
 // Scaffold files (PROGRESS.md, current_tasks/.gitkeep) are added if missing.
-func InitUpstream(projectDir string) error {
-	upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
+func InitUpstream(sourceDir, upstreamPath string) error {
+	projectDir := sourceDir
 
 	if err := os.MkdirAll(filepath.Dir(upstreamPath), 0755); err != nil {
 		return fmt.Errorf("gitops: failed to create parent dir: %w", err)
@@ -84,7 +84,9 @@ func InitUpstream(projectDir string) error {
 	}
 
 	if added {
-		if _, err := git(seedDir, "add", "."); err != nil {
+		// Use -f to force-add scaffold files that may be in .gitignore
+		// (e.g. current_tasks/ is typically gitignored in the project).
+		if _, err := git(seedDir, "add", "-f", "."); err != nil {
 			return fmt.Errorf("gitops: failed to stage seed files: %w", err)
 		}
 		if _, err := git(seedDir, "commit", "-m", "metamorph: add scaffold files"); err != nil {

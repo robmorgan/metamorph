@@ -118,6 +118,8 @@ func (m *mockDocker) ContainerLogs(ctx context.Context, ctr string, options cont
 
 func TestBuildImage(t *testing.T) {
 	t.Run("writes embedded assets and calls build", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
 		projectDir := t.TempDir()
 
 		mock := &mockDocker{buildBody: `{"stream":"Successfully built abc123"}`}
@@ -127,9 +129,9 @@ func TestBuildImage(t *testing.T) {
 			t.Fatalf("BuildImage: %v", err)
 		}
 
-		// Verify embedded files were written to .metamorph/docker/.
+		// Verify embedded files were written to ~/.metamorph/docker/.
 		for _, name := range []string{"Dockerfile", "entrypoint.sh", "SYSTEM_PROMPT.md"} {
-			path := filepath.Join(projectDir, ".metamorph", "docker", name)
+			path := filepath.Join(home, ".metamorph", "docker", name)
 			data, err := os.ReadFile(path)
 			if err != nil {
 				t.Errorf("expected %s in build dir: %v", name, err)
@@ -142,6 +144,7 @@ func TestBuildImage(t *testing.T) {
 	})
 
 	t.Run("returns error when build fails", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
 		projectDir := t.TempDir()
 
 		mock := &mockDocker{buildErr: fmt.Errorf("build failed")}
@@ -157,6 +160,7 @@ func TestBuildImage(t *testing.T) {
 	})
 
 	t.Run("passes extra packages as build arg", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
 		projectDir := t.TempDir()
 
 		mock := &mockDocker{buildBody: `{"stream":"Successfully built abc123"}`}
@@ -176,6 +180,7 @@ func TestBuildImage(t *testing.T) {
 	})
 
 	t.Run("omits build arg when no extra packages", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
 		projectDir := t.TempDir()
 
 		mock := &mockDocker{buildBody: `{"stream":"Successfully built abc123"}`}

@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/robmorgan/metamorph/internal/broker"
+	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/spf13/cobra"
 )
@@ -31,38 +34,68 @@ var initCmd = &cobra.Command{
 			return fmt.Errorf("directory is not a git repository: run 'git init' first")
 		}
 
-		// Check if already initialized.
-		configPath := filepath.Join(absDir, "metamorph.toml")
+		// Check if project config already exists under ~/.metamorph/projects/{name}/.
+		projectDir := constants.ProjectDir(projectName)
+		configPath := filepath.Join(projectDir, constants.ProjectConfigFile)
 		if _, err := os.Stat(configPath); err == nil {
-			return fmt.Errorf("metamorph.toml already exists in %s", absDir)
+			return fmt.Errorf("project %q already exists (config at %s)", projectName, configPath)
 		}
 
-		// Write metamorph.toml.
-		configContent := fmt.Sprintf(`[project]
-name = %q
-description = ""
-
-[agents]
-count = 4
-model = "claude-opus-4-6"
-roles = ["developer", "developer", "tester", "refactorer"]
-
-[docker]
-image = "metamorph-agent:latest"
-extra_packages = []
-
-[testing]
-command = ""
-fast_command = ""
-
-[notifications]
-webhook_url = ""
-`, projectName)
-
-		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-			return fmt.Errorf("failed to write metamorph.toml: %w", err)
+		// Create project config directory.
+		if err := os.MkdirAll(projectDir, 0755); err != nil {
+			return fmt.Errorf("failed to create project dir: %w", err)
 		}
-		fmt.Println("  Created metamorph.toml")
+
+		// Write config.json under ~/.metamorph/projects/{name}/.
+		cfg := &config.Config{
+			Project: config.ProjectConfig{
+				Name:        projectName,
+				Description: "",
+			},
+			Repos: []config.RepoConfig{
+				{Path: absDir, Label: ""},
+			},
+			Agents: config.AgentsConfig{
+				Count: 4,
+				Model: "claude-opus-4-6",
+				Roles: []string{"developer", "developer", "tester", "refactorer"},
+			},
+			Docker: config.DockerConfig{
+				Image:         "metamorph-agent:latest",
+				ExtraPackages: []string{},
+			},
+			Testing: config.TestingConfig{
+				Command:     "",
+				FastCommand: "",
+			},
+			Notifications: config.NotificationsConfig{
+				WebhookURL: "",
+			},
+		}
+		if err := config.Save(cfg, configPath); err != nil {
+			return fmt.Errorf("failed to write config: %w", err)
+		}
+		fmt.Printf("  Created %s\n", configPath)
+
+		// Register project in SQLite.
+		dbPath := constants.BrokerDBPath()
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+			return fmt.Errorf("failed to create db dir: %w", err)
+		}
+		store, err := broker.NewSQLiteStore(dbPath)
+		if err != nil {
+			return fmt.Errorf("failed to open broker database: %w", err)
+		}
+		defer store.Close()
+
+		ctx := context.Background()
+		if err := store.RegisterProject(ctx, projectName); err != nil {
+			return fmt.Errorf("failed to register project: %w", err)
+		}
+		if err := store.AddProjectRepo(ctx, projectName, absDir, ""); err != nil {
+			return fmt.Errorf("failed to register repo path: %w", err)
+		}
+		fmt.Println("  Registered project in broker database")
 
 		// Write AGENT_PROMPT.md skeleton only if it doesn't already exist.
 		agentPromptPath := filepath.Join(absDir, constants.AgentPromptFile)
@@ -109,17 +142,15 @@ Add project-specific instructions for your agents here.
 			fmt.Println("  Using existing PROGRESS.md")
 		}
 
-		// Create directories.
-		for _, d := range []string{constants.TaskLockDir, constants.AgentLogDir} {
-			if err := os.MkdirAll(filepath.Join(absDir, d), 0755); err != nil {
-				return fmt.Errorf("failed to create %s: %w", d, err)
-			}
-			fmt.Printf("  Created %s/\n", d)
+		// Create task lock directory in repo.
+		if err := os.MkdirAll(filepath.Join(absDir, constants.TaskLockDir), 0755); err != nil {
+			return fmt.Errorf("failed to create %s: %w", constants.TaskLockDir, err)
 		}
+		fmt.Printf("  Created %s/\n", constants.TaskLockDir)
 
 		// Append entries to .gitignore (create if missing, never overwrite).
 		gitignorePath := filepath.Join(absDir, ".gitignore")
-		requiredEntries := []string{".metamorph/", "agent_logs/"}
+		requiredEntries := []string{"current_tasks/"}
 		existing, _ := os.ReadFile(gitignorePath)
 		existingStr := string(existing)
 		var toAdd []string
@@ -133,7 +164,6 @@ Add project-specific instructions for your agents here.
 			if err != nil {
 				return fmt.Errorf("failed to open .gitignore: %w", err)
 			}
-			// Add a newline before appending if the file doesn't end with one.
 			if len(existingStr) > 0 && !strings.HasSuffix(existingStr, "\n") {
 				_, _ = f.WriteString("\n")
 			}
@@ -151,7 +181,7 @@ Add project-specific instructions for your agents here.
 
 		fmt.Printf("\nProject %q initialized successfully!\n\n", projectName)
 		fmt.Println("Next steps:")
-		fmt.Println("  1. Review and customize metamorph.toml")
+		fmt.Printf("  1. Review and customize %s\n", configPath)
 		fmt.Println("  2. Edit AGENT_PROMPT.md with project-specific instructions")
 		fmt.Println("  3. Commit the changes:")
 		fmt.Println("       git add -A && git commit -m \"Initialize metamorph\"")
@@ -167,4 +197,3 @@ Add project-specific instructions for your agents here.
 func init() {
 	rootCmd.AddCommand(initCmd)
 }
-

@@ -1,30 +1,108 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"text/tabwriter"
 
+	"github.com/robmorgan/metamorph/internal/broker"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/daemon"
-	"github.com/robmorgan/metamorph/internal/docker"
 	"github.com/robmorgan/metamorph/internal/gitops"
 	"github.com/spf13/cobra"
 )
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the metamorph daemon and agents",
+	Short: "Start agents for the current project",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		daemonMode, _ := cmd.Flags().GetBool("daemon-mode")
-
-		if daemonMode {
-			return runDaemonMode(cmd)
+		projectName, cfg, err := resolveProject(cmd)
+		if err != nil {
+			return err
 		}
-		return runForegroundStart(cmd)
+
+		repoPath := cfg.Repos[0].Path
+		if len(cfg.Repos) == 0 {
+			return fmt.Errorf("no repos configured for project %q", projectName)
+		}
+
+		// Require a clean working tree.
+		statusCmd := exec.Command("git", "status", "--porcelain")
+		statusCmd.Dir = repoPath
+		statusOut, err := statusCmd.Output()
+		if err != nil {
+			return fmt.Errorf("failed to check git status: %w", err)
+		}
+		if len(statusOut) > 0 {
+			return fmt.Errorf("uncommitted changes detected in project directory\n\nPlease commit your changes first:\n  git add -A && git commit -m \"your message\"")
+		}
+
+		// Create upstream bare repo if it doesn't exist.
+		upstreamPath := constants.UpstreamRepoPath(projectName)
+		if _, err := os.Stat(upstreamPath); os.IsNotExist(err) {
+			fmt.Println("Creating upstream repository...")
+			if err := gitops.InitUpstream(repoPath, upstreamPath); err != nil {
+				return fmt.Errorf("failed to initialize upstream repo: %w", err)
+			}
+		}
+
+		oauthToken := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		if oauthToken == "" && apiKey == "" {
+			return fmt.Errorf("no credentials found: set CLAUDE_CODE_OAUTH_TOKEN (Claude Pro/Max) or ANTHROPIC_API_KEY")
+		}
+
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		if dryRun {
+			fmt.Printf("Project:  %s\n", cfg.Project.Name)
+			fmt.Printf("Agents:   %d\n", cfg.Agents.Count)
+			fmt.Printf("Model:    %s\n", cfg.Agents.Model)
+			fmt.Printf("Roles:    %v\n", cfg.Agents.Roles)
+			fmt.Println("\n(dry run -- no agents started)")
+			return nil
+		}
+
+		// Auto-start daemon if not running.
+		if !daemon.IsRunning() {
+			fmt.Println("Starting daemon...")
+			if err := daemon.Start(apiKey, oauthToken); err != nil {
+				return fmt.Errorf("failed to start daemon: %w", err)
+			}
+		}
+
+		// Set project status to "running" in broker DB so daemon picks it up.
+		dbPath := constants.BrokerDBPath()
+		store, err := broker.NewSQLiteStore(dbPath)
+		if err != nil {
+			return fmt.Errorf("failed to open broker database: %w", err)
+		}
+		defer store.Close()
+
+		ctx := context.Background()
+		if err := store.UpdateProjectStatus(ctx, projectName, "running"); err != nil {
+			return fmt.Errorf("failed to update project status: %w", err)
+		}
+
+		fmt.Printf("Starting agents for %q...\n", projectName)
+		fmt.Println("(daemon will start agents on next monitor cycle)")
+
+		// Try to read status after a brief wait.
+		state, err := daemon.GetStatus(projectName)
+		if err == nil && len(state.Agents) > 0 {
+			fmt.Println()
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			_, _ = fmt.Fprintln(w, "AGENT\tROLE\tSTATUS")
+			for _, a := range state.Agents {
+				_, _ = fmt.Fprintf(w, "agent-%d\t%s\t%s\n", a.ID, a.Role, a.Status)
+			}
+			_ = w.Flush()
+		}
+
+		fmt.Printf("\nUse 'metamorph status' to monitor, 'metamorph stop' to stop.\n")
+
+		return nil
 	},
 }
 
@@ -32,159 +110,5 @@ func init() {
 	startCmd.Flags().IntP("agents", "n", 0, "Number of agents to start (overrides config)")
 	startCmd.Flags().String("model", "", "Model to use (overrides config)")
 	startCmd.Flags().Bool("dry-run", false, "Print what would happen without starting")
-
-	// Hidden flags for daemon re-exec.
-	startCmd.Flags().Bool("daemon-mode", false, "Run as daemon (internal)")
-	startCmd.Flags().String("project-dir", "", "Project directory (internal)")
-	startCmd.Flags().String("api-key", "", "API key (internal)")
-	startCmd.Flags().String("oauth-token", "", "OAuth token (internal)")
-	_ = startCmd.Flags().MarkHidden("daemon-mode")
-	_ = startCmd.Flags().MarkHidden("project-dir")
-	_ = startCmd.Flags().MarkHidden("api-key")
-	_ = startCmd.Flags().MarkHidden("oauth-token")
-
 	rootCmd.AddCommand(startCmd)
-}
-
-func runDaemonMode(cmd *cobra.Command) error {
-	projectDir, _ := cmd.Flags().GetString("project-dir")
-	apiKey, _ := cmd.Flags().GetString("api-key")
-	oauthToken, _ := cmd.Flags().GetString("oauth-token")
-
-	if projectDir == "" {
-		return fmt.Errorf("--project-dir is required in daemon mode")
-	}
-	if apiKey == "" && oauthToken == "" {
-		return fmt.Errorf("--api-key or --oauth-token is required in daemon mode")
-	}
-
-	cfg, err := loadConfig(projectDir)
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	// Override git author from env vars if set.
-	if name := os.Getenv("GIT_AUTHOR_NAME"); name != "" {
-		cfg.Git.AuthorName = name
-	}
-	if email := os.Getenv("GIT_AUTHOR_EMAIL"); email != "" {
-		cfg.Git.AuthorEmail = email
-	}
-
-	dockerClient, err := docker.NewClient(cfg.Project.Name)
-	if err != nil {
-		return fmt.Errorf("failed to create Docker client: %w", err)
-	}
-
-	return daemon.Run(projectDir, cfg, apiKey, oauthToken, dockerClient)
-}
-
-func runForegroundStart(cmd *cobra.Command) error {
-	projectDir, err := resolveProjectDir()
-	if err != nil {
-		return err
-	}
-
-	// Require the project directory to be a git repo.
-	if _, err := os.Stat(filepath.Join(projectDir, ".git")); os.IsNotExist(err) {
-		return fmt.Errorf("project directory is not a git repository\n\nRun 'metamorph init' to configure the project properly")
-	}
-
-	cfg, err := loadConfig(projectDir)
-	if err != nil {
-		return err
-	}
-
-	// Override git author from env vars if set.
-	if name := os.Getenv("GIT_AUTHOR_NAME"); name != "" {
-		cfg.Git.AuthorName = name
-	}
-	if email := os.Getenv("GIT_AUTHOR_EMAIL"); email != "" {
-		cfg.Git.AuthorEmail = email
-	}
-
-	// Require a clean working tree before starting.
-	statusCmd := exec.Command("git", "status", "--porcelain")
-	statusCmd.Dir = projectDir
-	statusOut, err := statusCmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to check git status: %w", err)
-	}
-	if len(statusOut) > 0 {
-		return fmt.Errorf("uncommitted changes detected in project directory\n\nPlease commit your changes first:\n  git add -A && git commit -m \"your message\"")
-	}
-
-	// Create upstream bare repo if it doesn't exist yet (first start after init).
-	upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
-	if _, err := os.Stat(upstreamPath); os.IsNotExist(err) {
-		fmt.Println("Creating upstream repository...")
-		if err := gitops.InitUpstream(projectDir); err != nil {
-			return fmt.Errorf("failed to initialize upstream repo: %w", err)
-		}
-	}
-
-	// Apply flag overrides to a local copy for display/dry-run purposes.
-	// Note: these overrides are NOT forwarded to the daemon. The daemon reads
-	// from metamorph.toml directly.
-	displayCfg := *cfg
-	displayCfg.Agents = cfg.Agents
-
-	if n, _ := cmd.Flags().GetInt("agents"); n > 0 {
-		displayCfg.Agents.Count = n
-		slog.Info("overriding agent count from flag", "count", n)
-	}
-	if model, _ := cmd.Flags().GetString("model"); model != "" {
-		displayCfg.Agents.Model = model
-		slog.Info("overriding model from flag", "model", model)
-	}
-
-	oauthToken := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if oauthToken == "" && apiKey == "" {
-		return fmt.Errorf("no credentials found: set CLAUDE_CODE_OAUTH_TOKEN (Claude Pro/Max) or ANTHROPIC_API_KEY")
-	}
-
-	if daemon.IsRunning(projectDir) {
-		return fmt.Errorf("daemon is already running (use 'metamorph status' to check)")
-	}
-
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	if dryRun {
-		fmt.Printf("Project:  %s\n", displayCfg.Project.Name)
-		fmt.Printf("Agents:   %d\n", displayCfg.Agents.Count)
-		fmt.Printf("Model:    %s\n", displayCfg.Agents.Model)
-		fmt.Printf("Roles:    %v\n", displayCfg.Agents.Roles)
-		fmt.Println("\n(dry run — no agents started)")
-		return nil
-	}
-
-	// Update config file values if overrides were given, so daemon reads them.
-	// Actually, per design: config file is authoritative for the daemon.
-	// Overrides only affect this display. The user should edit metamorph.toml.
-
-	fmt.Printf("Starting metamorph daemon for %q...\n", cfg.Project.Name)
-
-	if err := daemon.Start(projectDir, cfg, apiKey, oauthToken); err != nil {
-		return err
-	}
-
-	// Read status to display agent table.
-	state, err := daemon.GetStatus(projectDir)
-	if err != nil {
-		fmt.Println("Daemon started, but could not read status.")
-		return nil
-	}
-
-	fmt.Printf("\nDaemon running (PID in .metamorph/daemon.pid)\n\n")
-
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "AGENT\tROLE\tSTATUS")
-	for _, a := range state.Agents {
-		_, _ = fmt.Fprintf(w, "agent-%d\t%s\t%s\n", a.ID, a.Role, a.Status)
-	}
-	_ = w.Flush()
-
-	fmt.Printf("\nUse 'metamorph status' to monitor, 'metamorph stop' to stop.\n")
-
-	return nil
 }

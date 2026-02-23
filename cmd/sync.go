@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/gitops"
@@ -13,13 +12,18 @@ var syncCmd = &cobra.Command{
 	Use:   "sync",
 	Short: "Sync changes between upstream and agent worktrees",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectDir, err := resolveProjectDir()
+		projectName, cfg, err := resolveProject(cmd)
 		if err != nil {
 			return err
 		}
 
-		upstreamPath := filepath.Join(projectDir, constants.UpstreamDir)
-		workingCopyPath := filepath.Join(projectDir, ".metamorph", "work")
+		if len(cfg.Repos) == 0 {
+			return fmt.Errorf("no repos configured for project %q", projectName)
+		}
+
+		upstreamPath := constants.UpstreamRepoPath(projectName)
+		workingCopyPath := constants.WorkDir(projectName)
+		repoPath := cfg.Repos[0].Path
 
 		// Sync upstream to working copy (for task file reading).
 		if _, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath); err != nil {
@@ -27,7 +31,7 @@ var syncCmd = &cobra.Command{
 		}
 
 		// Sync agent commits to user's project.
-		summary, err := gitops.SyncToProjectDir(upstreamPath, projectDir)
+		summary, err := gitops.SyncToProjectDir(upstreamPath, repoPath)
 		if err != nil {
 			return fmt.Errorf("sync failed: %w", err)
 		}
