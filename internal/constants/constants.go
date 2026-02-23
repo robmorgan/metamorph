@@ -70,9 +70,9 @@ func BrokerDBPath() string {
 	return filepath.Join(GlobalDir(), BrokerDBFile)
 }
 
-// UpstreamRepoPath returns the path to a project's upstream bare repo.
-func UpstreamRepoPath(projectName string) string {
-	return filepath.Join(ProjectDir(projectName), ReposDir, projectName+".git")
+// UpstreamRepoPath returns the path to a project's upstream bare repo for a given label.
+func UpstreamRepoPath(projectName, repoLabel string) string {
+	return filepath.Join(ProjectDir(projectName), ReposDir, repoLabel+".git")
 }
 
 // WorkDir returns the path to a project's working copy directory.

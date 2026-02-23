@@ -38,6 +38,12 @@ const (
 	listTimeout      = 10 * time.Second
 )
 
+// UpstreamMount describes a single upstream bare repo to mount into the container.
+type UpstreamMount struct {
+	Label string // mount at /upstream/{label}
+	Path  string // host path to bare repo
+}
+
 // AgentOpts configures a new agent container.
 type AgentOpts struct {
 	ProjectDir     string
@@ -49,7 +55,8 @@ type AgentOpts struct {
 	GitAuthorName  string // Git author name for commits (optional)
 	GitAuthorEmail string // Git author email for commits (optional)
 	BrokerURL      string // Task broker URL (optional)
-	UpstreamPath   string // Path to the upstream bare repo (if set, overrides default)
+	UpstreamPath   string // Deprecated: single upstream path (kept for backward compat)
+	UpstreamPaths  []UpstreamMount // Per-repo upstream mounts
 	LogDir         string // Path to the agent log directory (if set, overrides default)
 }
 
@@ -193,13 +200,18 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 	_ = c.cli.ContainerStop(ctx, containerName, container.StopOptions{})
 	_ = c.cli.ContainerRemove(ctx, containerName, container.RemoveOptions{})
 
-	upstreamSource := opts.UpstreamPath
-	if upstreamSource == "" {
-		upstreamSource = filepath.Join(opts.ProjectDir, ".metamorph", "upstream.git")
-	}
-	upstreamAbs, err := filepath.Abs(upstreamSource)
-	if err != nil {
-		return "", fmt.Errorf("docker: failed to resolve upstream path: %w", err)
+	// Build upstream mounts: prefer UpstreamPaths, fall back to single UpstreamPath.
+	upstreamMounts := opts.UpstreamPaths
+	if len(upstreamMounts) == 0 {
+		upstreamSource := opts.UpstreamPath
+		if upstreamSource == "" {
+			upstreamSource = filepath.Join(opts.ProjectDir, ".metamorph", "upstream.git")
+		}
+		upstreamAbs, err := filepath.Abs(upstreamSource)
+		if err != nil {
+			return "", fmt.Errorf("docker: failed to resolve upstream path: %w", err)
+		}
+		upstreamMounts = []UpstreamMount{{Label: "", Path: upstreamAbs}}
 	}
 
 	agentPromptAbs, err := filepath.Abs(filepath.Join(opts.ProjectDir, constants.AgentPromptFile))
@@ -251,25 +263,39 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 		},
 	}
 
-	hostConfig := &container.HostConfig{
-		Mounts: []mount.Mount{
-			{
-				Type:   mount.TypeBind,
-				Source: upstreamAbs,
-				Target: "/upstream",
-			},
-			{
-				Type:   mount.TypeBind,
-				Source: logDirAbs,
-				Target: "/workspace/logs",
-			},
-			{
-				Type:     mount.TypeBind,
-				Source:   agentPromptAbs,
-				Target:   "/workspace/AGENT_PROMPT.md",
-				ReadOnly: true,
-			},
+	// Build mounts: upstream(s) + logs + agent prompt.
+	var mounts []mount.Mount
+	for _, um := range upstreamMounts {
+		absPath, err := filepath.Abs(um.Path)
+		if err != nil {
+			return "", fmt.Errorf("docker: failed to resolve upstream path for %q: %w", um.Label, err)
+		}
+		target := "/upstream"
+		if um.Label != "" {
+			target = "/upstream/" + um.Label
+		}
+		mounts = append(mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: absPath,
+			Target: target,
+		})
+	}
+	mounts = append(mounts,
+		mount.Mount{
+			Type:   mount.TypeBind,
+			Source: logDirAbs,
+			Target: "/workspace/logs",
 		},
+		mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   agentPromptAbs,
+			Target:   "/workspace/AGENT_PROMPT.md",
+			ReadOnly: true,
+		},
+	)
+
+	hostConfig := &container.HostConfig{
+		Mounts: mounts,
 		RestartPolicy: container.RestartPolicy{
 			Name: container.RestartPolicyUnlessStopped,
 		},

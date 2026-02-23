@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/robmorgan/metamorph/internal/broker"
+	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/daemon"
 	"github.com/robmorgan/metamorph/internal/gitops"
@@ -45,20 +46,22 @@ var stopCmd = &cobra.Command{
 
 		fmt.Printf("Stopping agents for %q...\n", projectName)
 
-		// Sync agent commits to user's project.
-		upstreamPath := constants.UpstreamRepoPath(projectName)
-		repoPath := cfg.Repos[0].Path
+		// Sync agent commits to user's project for each repo.
+		for _, repo := range cfg.Repos {
+			label := config.RepoLabel(repo)
+			upstreamPath := constants.UpstreamRepoPath(projectName, label)
 
-		workingCopyPath := constants.WorkDir(projectName)
-		if _, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath); err != nil {
-			fmt.Printf("Warning: failed to sync working copy: %v\n", err)
-		}
+			workingCopyPath := constants.WorkDir(projectName)
+			if _, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath); err != nil {
+				fmt.Printf("Warning: failed to sync working copy for %q: %v\n", label, err)
+			}
 
-		summary, err := gitops.SyncToProjectDir(upstreamPath, repoPath)
-		if err != nil {
-			fmt.Printf("Warning: failed to sync to project: %v\n", err)
-		} else if summary != "" {
-			fmt.Printf("\nSynced commits:\n%s\n", summary)
+			summary, err := gitops.SyncToProjectDir(upstreamPath, repo.Path)
+			if err != nil {
+				fmt.Printf("Warning: failed to sync repo %q: %v\n", label, err)
+			} else if summary != "" {
+				fmt.Printf("\nSynced commits for %q:\n%s\n", label, summary)
+			}
 		}
 
 		fmt.Println("\nAgents stopped.")

@@ -532,6 +532,68 @@ func TestContainerNamingConvention(t *testing.T) {
 	}
 }
 
+func TestStartAgent_MultiRepoMounts(t *testing.T) {
+	projectDir := t.TempDir()
+	backendDir := filepath.Join(projectDir, "upstream-backend.git")
+	frontendDir := filepath.Join(projectDir, "upstream-frontend.git")
+	_ = os.MkdirAll(backendDir, 0755)
+	_ = os.MkdirAll(frontendDir, 0755)
+	_ = os.WriteFile(filepath.Join(projectDir, "AGENT_PROMPT.md"), []byte("# Prompt\n"), 0644)
+
+	mock := &mockDocker{
+		createResp: container.CreateResponse{ID: "cid-multi"},
+	}
+	c := newClientWithAPI("myproj", mock)
+
+	opts := AgentOpts{
+		ProjectDir: projectDir,
+		AgentID:    1,
+		Role:       "developer",
+		Model:      "claude-sonnet",
+		APIKey:     "sk-test",
+		UpstreamPaths: []UpstreamMount{
+			{Label: "backend", Path: backendDir},
+			{Label: "frontend", Path: frontendDir},
+		},
+	}
+
+	id, err := c.StartAgent(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+	if id != "cid-multi" {
+		t.Errorf("container ID = %q, want %q", id, "cid-multi")
+	}
+
+	if len(mock.created) != 1 {
+		t.Fatalf("expected 1 create call, got %d", len(mock.created))
+	}
+	call := mock.created[0]
+
+	// Should have 4 mounts: 2 upstreams + logs + agent_prompt.
+	if len(call.Host.Mounts) != 4 {
+		t.Fatalf("expected 4 mounts, got %d", len(call.Host.Mounts))
+	}
+
+	// Verify upstream mounts.
+	backendMount := call.Host.Mounts[0]
+	if backendMount.Target != "/upstream/backend" {
+		t.Errorf("backend mount target = %q, want /upstream/backend", backendMount.Target)
+	}
+	frontendMount := call.Host.Mounts[1]
+	if frontendMount.Target != "/upstream/frontend" {
+		t.Errorf("frontend mount target = %q, want /upstream/frontend", frontendMount.Target)
+	}
+
+	// Verify logs and prompt mounts still present.
+	if call.Host.Mounts[2].Target != "/workspace/logs" {
+		t.Errorf("logs mount target = %q", call.Host.Mounts[2].Target)
+	}
+	if call.Host.Mounts[3].Target != "/workspace/AGENT_PROMPT.md" {
+		t.Errorf("prompt mount target = %q", call.Host.Mounts[3].Target)
+	}
+}
+
 func TestStopAllAgents_CallsStopForEach(t *testing.T) {
 	mock := &mockDocker{
 		listResult: []types.Container{

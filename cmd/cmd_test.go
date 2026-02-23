@@ -115,12 +115,24 @@ func testProjectWithUpstream(t *testing.T) string {
 	gitExec(t, dir, "add", ".")
 	gitExec(t, dir, "commit", "-m", "initial commit")
 
-	// Clone the project as a bare upstream repo.
-	upstreamPath := constants.UpstreamRepoPath(projectName)
-	if err := os.MkdirAll(filepath.Dir(upstreamPath), 0755); err != nil {
+	// Clone the project as a bare upstream repo for each configured repo.
+	// Load config to get repo labels.
+	cfg, err := config.LoadProject(projectName)
+	if err != nil {
 		t.Fatal(err)
 	}
-	gitExec(t, dir, "clone", "--bare", ".", upstreamPath)
+	for _, repo := range cfg.Repos {
+		label := config.RepoLabel(repo)
+		upstreamPath := constants.UpstreamRepoPath(projectName, label)
+		if err := os.MkdirAll(filepath.Dir(upstreamPath), 0755); err != nil {
+			t.Fatal(err)
+		}
+		gitExec(t, repo.Path, "clone", "--bare", ".", upstreamPath)
+	}
+
+	// Use primary repo for scaffold seeding.
+	primaryLabel := config.RepoLabel(cfg.Repos[0])
+	upstreamPath := constants.UpstreamRepoPath(projectName, primaryLabel)
 
 	// Add scaffold files if needed (current_tasks/.gitkeep).
 	tmpDir := t.TempDir()
@@ -528,8 +540,9 @@ func TestStartCreatesUpstream(t *testing.T) {
 
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
 
-	// Verify upstream doesn't exist yet.
-	upstreamPath := constants.UpstreamRepoPath("test-proj")
+	// Verify upstream doesn't exist yet (use dir basename as label since label is empty).
+	repoLabel := filepath.Base(dir)
+	upstreamPath := constants.UpstreamRepoPath("test-proj", repoLabel)
 	if _, err := os.Stat(upstreamPath); err == nil {
 		t.Fatal("upstream should not exist before start")
 	}

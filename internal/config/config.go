@@ -63,6 +63,15 @@ type BrokerConfig struct {
 	Port int `json:"port"`
 }
 
+// RepoLabel returns the label for a repo config entry.
+// If Label is set, it is returned; otherwise falls back to the directory basename.
+func RepoLabel(r RepoConfig) string {
+	if r.Label != "" {
+		return r.Label
+	}
+	return filepath.Base(r.Path)
+}
+
 // Load reads a JSON config file from path and validates it.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)

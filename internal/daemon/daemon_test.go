@@ -813,7 +813,7 @@ func TestCountCommitsAndNotify(t *testing.T) {
 		lastErrorNotified: make(map[int]time.Time),
 	}
 
-	upstreamPath := p.UpstreamRepoPath()
+	upstreamPath := p.PrimaryUpstreamRepoPath()
 	_ = os.MkdirAll(upstreamPath, 0755)
 
 	// Init a non-bare repo with a commit so rev-list works.

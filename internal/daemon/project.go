@@ -77,7 +77,7 @@ func (p *ProjectInstance) StartAgents(ctx context.Context) error {
 			GitAuthorName:  p.Config.Git.AuthorName,
 			GitAuthorEmail: p.Config.Git.AuthorEmail,
 			BrokerURL:      brokerURL,
-			UpstreamPath:   p.UpstreamRepoPath(),
+			UpstreamPaths:  p.UpstreamRepoPaths(),
 			LogDir:         logDir,
 		})
 		if err != nil {
@@ -119,9 +119,26 @@ func (p *ProjectInstance) AgentLogDir() string {
 	return filepath.Join(p.stateDir, constants.AgentLogDir)
 }
 
-// UpstreamRepoPath returns the path to the upstream bare repo for this project.
-func (p *ProjectInstance) UpstreamRepoPath() string {
-	return filepath.Join(p.stateDir, constants.ReposDir, p.Name+".git")
+// UpstreamRepoPaths returns all upstream repo mounts for this project.
+func (p *ProjectInstance) UpstreamRepoPaths() []docker.UpstreamMount {
+	var mounts []docker.UpstreamMount
+	for _, repo := range p.Repos {
+		label := config.RepoLabel(repo)
+		mounts = append(mounts, docker.UpstreamMount{
+			Label: label,
+			Path:  constants.UpstreamRepoPath(p.Name, label),
+		})
+	}
+	return mounts
+}
+
+// PrimaryUpstreamRepoPath returns the upstream bare repo path for the primary (first) repo.
+func (p *ProjectInstance) PrimaryUpstreamRepoPath() string {
+	if len(p.Repos) == 0 {
+		return ""
+	}
+	label := config.RepoLabel(p.Repos[0])
+	return constants.UpstreamRepoPath(p.Name, label)
 }
 
 // primaryRepoPath returns the first registered repo path (the "main" project dir).

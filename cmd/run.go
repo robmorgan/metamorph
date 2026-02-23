@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/robmorgan/metamorph/assets"
+	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/gitops"
 	"github.com/spf13/cobra"
@@ -28,6 +29,7 @@ var runCmd = &cobra.Command{
 		if len(cfg.Repos) == 0 {
 			return fmt.Errorf("no repos configured for project %q", projectName)
 		}
+		// Use primary repo for AGENT_PROMPT.md path.
 		repoPath := cfg.Repos[0].Path
 
 		oauthToken := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
@@ -43,18 +45,29 @@ var runCmd = &cobra.Command{
 		once, _ := cmd.Flags().GetBool("once")
 		role, _ := cmd.Flags().GetString("role")
 
-		upstreamPath := constants.UpstreamRepoPath(projectName)
-
-		// Clone upstream to temp dir.
+		// Clone all upstreams to temp dir.
 		tmpDir, err := os.MkdirTemp("", "metamorph-run-*")
 		if err != nil {
 			return fmt.Errorf("failed to create temp dir: %w", err)
 		}
 		defer func() { _ = os.RemoveAll(tmpDir) }()
 
+		// Clone primary repo as agent-work.
+		primaryLabel := config.RepoLabel(cfg.Repos[0])
+		primaryUpstream := constants.UpstreamRepoPath(projectName, primaryLabel)
 		agentDir := tmpDir + "/agent-work"
-		if err := gitops.CloneForAgent(upstreamPath, 0, agentDir); err != nil {
-			return fmt.Errorf("failed to clone upstream: %w", err)
+		if err := gitops.CloneForAgent(primaryUpstream, 0, agentDir); err != nil {
+			return fmt.Errorf("failed to clone upstream for %q: %w", primaryLabel, err)
+		}
+
+		// Clone additional repos alongside.
+		for _, repo := range cfg.Repos[1:] {
+			label := config.RepoLabel(repo)
+			upstreamPath := constants.UpstreamRepoPath(projectName, label)
+			destDir := tmpDir + "/" + label
+			if err := gitops.CloneForAgent(upstreamPath, 0, destDir); err != nil {
+				return fmt.Errorf("failed to clone upstream for %q: %w", label, err)
+			}
 		}
 
 		fmt.Printf("Running agent (role=%s, model=%s)...\n", role, cfg.Agents.Model)

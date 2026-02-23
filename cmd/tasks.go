@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/gitops"
 	"github.com/robmorgan/metamorph/internal/tasks"
@@ -19,13 +20,18 @@ var tasksCmd = &cobra.Command{
 	Use:   "tasks",
 	Short: "Manage and view agent tasks",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectName, err := resolveProjectName(cmd)
+		projectName, cfg, err := resolveProject(cmd)
 		if err != nil {
 			return err
 		}
 
-		// Sync to working copy first so we can read task files.
-		upstreamPath := constants.UpstreamRepoPath(projectName)
+		if len(cfg.Repos) == 0 {
+			return fmt.Errorf("no repos configured for project %q", projectName)
+		}
+
+		// Use primary repo for task files.
+		primaryLabel := config.RepoLabel(cfg.Repos[0])
+		upstreamPath := constants.UpstreamRepoPath(projectName, primaryLabel)
 		workingCopyPath := constants.WorkDir(projectName)
 		if _, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath); err != nil {
 			return fmt.Errorf("failed to sync working copy: %w", err)

@@ -92,8 +92,11 @@ var initCmd = &cobra.Command{
 		if err := store.RegisterProject(ctx, projectName); err != nil {
 			return fmt.Errorf("failed to register project: %w", err)
 		}
-		if err := store.AddProjectRepo(ctx, projectName, absDir, ""); err != nil {
-			return fmt.Errorf("failed to register repo path: %w", err)
+		for _, repo := range cfg.Repos {
+			label := config.RepoLabel(repo)
+			if err := store.AddProjectRepo(ctx, projectName, repo.Path, label); err != nil {
+				return fmt.Errorf("failed to register repo %q: %w", label, err)
+			}
 		}
 		fmt.Println("  Registered project in broker database")
 

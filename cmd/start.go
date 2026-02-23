@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/robmorgan/metamorph/internal/broker"
+	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
 	"github.com/robmorgan/metamorph/internal/daemon"
 	"github.com/robmorgan/metamorph/internal/gitops"
@@ -23,28 +24,33 @@ var startCmd = &cobra.Command{
 			return err
 		}
 
-		repoPath := cfg.Repos[0].Path
 		if len(cfg.Repos) == 0 {
 			return fmt.Errorf("no repos configured for project %q", projectName)
 		}
 
-		// Require a clean working tree.
-		statusCmd := exec.Command("git", "status", "--porcelain")
-		statusCmd.Dir = repoPath
-		statusOut, err := statusCmd.Output()
-		if err != nil {
-			return fmt.Errorf("failed to check git status: %w", err)
-		}
-		if len(statusOut) > 0 {
-			return fmt.Errorf("uncommitted changes detected in project directory\n\nPlease commit your changes first:\n  git add -A && git commit -m \"your message\"")
+		// Require a clean working tree for each repo.
+		for _, repo := range cfg.Repos {
+			label := config.RepoLabel(repo)
+			statusCmd := exec.Command("git", "status", "--porcelain")
+			statusCmd.Dir = repo.Path
+			statusOut, err := statusCmd.Output()
+			if err != nil {
+				return fmt.Errorf("failed to check git status for repo %q: %w", label, err)
+			}
+			if len(statusOut) > 0 {
+				return fmt.Errorf("uncommitted changes detected in repo %q (%s)\n\nPlease commit your changes first:\n  cd %s && git add -A && git commit -m \"your message\"", label, repo.Path, repo.Path)
+			}
 		}
 
-		// Create upstream bare repo if it doesn't exist.
-		upstreamPath := constants.UpstreamRepoPath(projectName)
-		if _, err := os.Stat(upstreamPath); os.IsNotExist(err) {
-			fmt.Println("Creating upstream repository...")
-			if err := gitops.InitUpstream(repoPath, upstreamPath); err != nil {
-				return fmt.Errorf("failed to initialize upstream repo: %w", err)
+		// Create upstream bare repo for each repo that doesn't have one.
+		for _, repo := range cfg.Repos {
+			label := config.RepoLabel(repo)
+			upstreamPath := constants.UpstreamRepoPath(projectName, label)
+			if _, err := os.Stat(upstreamPath); os.IsNotExist(err) {
+				fmt.Printf("Creating upstream repository for %q...\n", label)
+				if err := gitops.InitUpstream(repo.Path, upstreamPath); err != nil {
+					return fmt.Errorf("failed to initialize upstream repo for %q: %w", label, err)
+				}
 			}
 		}
 

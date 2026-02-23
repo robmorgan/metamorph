@@ -496,7 +496,7 @@ func (d *Daemon) restartCrashedAgents(ctx context.Context, p *ProjectInstance, i
 			GitAuthorName:  p.Config.Git.AuthorName,
 			GitAuthorEmail: p.Config.Git.AuthorEmail,
 			BrokerURL:      brokerURL,
-			UpstreamPath:   p.UpstreamRepoPath(),
+			UpstreamPaths:  p.UpstreamRepoPaths(),
 			LogDir:         logDir,
 		})
 		if err == nil {
@@ -516,7 +516,7 @@ func (d *Daemon) restartCrashedAgents(ctx context.Context, p *ProjectInstance, i
 }
 
 func (d *Daemon) updateTasks(p *ProjectInstance) {
-	upstreamPath := p.UpstreamRepoPath()
+	upstreamPath := p.PrimaryUpstreamRepoPath()
 	locks, err := tasks.ListTasks(upstreamPath)
 	if err != nil {
 		return
@@ -538,7 +538,7 @@ func (d *Daemon) updateTasks(p *ProjectInstance) {
 }
 
 func (d *Daemon) countCommitsAndNotify(p *ProjectInstance, now time.Time) {
-	upstreamPath := p.UpstreamRepoPath()
+	upstreamPath := p.PrimaryUpstreamRepoPath()
 	cmd := exec.Command("git", "rev-list", "--count", "HEAD")
 	cmd.Dir = upstreamPath
 	var out bytes.Buffer
@@ -594,7 +594,7 @@ func (d *Daemon) flushCommitBatch(p *ProjectInstance, now time.Time) {
 }
 
 func (d *Daemon) clearStaleTasksAndNotify(p *ProjectInstance, now time.Time) {
-	upstreamPath := p.UpstreamRepoPath()
+	upstreamPath := p.PrimaryUpstreamRepoPath()
 	cleared, err := tasks.ClearStaleTasks(upstreamPath, staleTaskMaxAge)
 	if err != nil {
 		return
@@ -613,19 +613,18 @@ func (d *Daemon) clearStaleTasksAndNotify(p *ProjectInstance, now time.Time) {
 }
 
 func (d *Daemon) syncRepos(p *ProjectInstance) {
-	upstreamPath := p.UpstreamRepoPath()
-	repoPath := p.primaryRepoPath()
-	if repoPath == "" {
-		return
-	}
+	for _, repo := range p.Repos {
+		label := config.RepoLabel(repo)
+		upstreamPath := constants.UpstreamRepoPath(p.Name, label)
 
-	workingCopyPath := filepath.Join(p.stateDir, "work")
-	if _, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath); err != nil {
-		slog.Warn("periodic sync to working copy failed", "project", p.Name, "error", err)
-	}
+		workingCopyPath := filepath.Join(p.stateDir, "work")
+		if _, err := gitops.SyncToWorkingCopy(upstreamPath, workingCopyPath); err != nil {
+			slog.Warn("periodic sync to working copy failed", "project", p.Name, "repo", label, "error", err)
+		}
 
-	if _, err := gitops.SyncToProjectDir(upstreamPath, repoPath); err != nil {
-		slog.Warn("periodic sync to project dir failed", "project", p.Name, "error", err)
+		if _, err := gitops.SyncToProjectDir(upstreamPath, repo.Path); err != nil {
+			slog.Warn("periodic sync to project dir failed", "project", p.Name, "repo", label, "error", err)
+		}
 	}
 }
 
