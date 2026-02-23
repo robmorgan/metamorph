@@ -72,7 +72,7 @@ type Daemon struct {
 	cfg        *config.GlobalConfig
 	apiKey     string
 	oauthToken string
-	docker     docker.DockerClient
+	docker     docker.DockerClient // lazily initialized
 	broker     *broker.Broker
 	projects   map[string]*ProjectInstance
 	mu         sync.Mutex
@@ -284,7 +284,7 @@ func IsRunning() bool {
 }
 
 // Run executes the daemon's main loop (called when --daemon-mode is set).
-func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string, dockerClient docker.DockerClient) error {
+func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string) error {
 	globalDir := constants.GlobalDir()
 
 	d := &Daemon{
@@ -292,7 +292,6 @@ func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string, dockerClient
 		cfg:        globalCfg,
 		apiKey:     apiKey,
 		oauthToken: oauthToken,
-		docker:     dockerClient,
 		startedAt:  time.Now().UTC(),
 		projects:   make(map[string]*ProjectInstance),
 	}
@@ -353,6 +352,20 @@ func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string, dockerClient
 	}
 }
 
+// getDockerClient returns the cached Docker client, creating it on first call.
+// Must be called with d.mu held.
+func (d *Daemon) getDockerClient() (docker.DockerClient, error) {
+	if d.docker != nil {
+		return d.docker, nil
+	}
+	client, err := docker.NewClient("metamorph")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+	}
+	d.docker = client
+	return d.docker, nil
+}
+
 // StartProject starts agents for a named project.
 func (d *Daemon) StartProject(ctx context.Context, projectName string) error {
 	d.mu.Lock()
@@ -362,16 +375,21 @@ func (d *Daemon) StartProject(ctx context.Context, projectName string) error {
 		return fmt.Errorf("project %q is already running", projectName)
 	}
 
+	dockerClient, err := d.getDockerClient()
+	if err != nil {
+		return err
+	}
+
 	cfg, err := config.LoadProject(projectName)
 	if err != nil {
 		return fmt.Errorf("failed to load project config: %w", err)
 	}
 
-	instance := NewProjectInstance(projectName, cfg, d.apiKey, d.oauthToken, d.docker)
+	instance := NewProjectInstance(projectName, cfg, d.apiKey, d.oauthToken, dockerClient)
 
 	// Build image.
 	slog.Info("building docker image", "project", projectName)
-	if err := d.docker.BuildImage(instance.primaryRepoPath(), cfg.Docker.ExtraPackages); err != nil {
+	if err := dockerClient.BuildImage(instance.primaryRepoPath(), cfg.Docker.ExtraPackages); err != nil {
 		return fmt.Errorf("failed to build image: %w", err)
 	}
 

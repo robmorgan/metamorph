@@ -6,7 +6,6 @@ import (
 
 	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/daemon"
-	"github.com/robmorgan/metamorph/internal/docker"
 	"github.com/spf13/cobra"
 )
 
@@ -66,10 +65,5 @@ func runDaemonProcess(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to load global config: %w", err)
 	}
 
-	dockerClient, err := docker.NewClient("metamorph")
-	if err != nil {
-		return fmt.Errorf("failed to create Docker client: %w", err)
-	}
-
-	return daemon.Run(globalCfg, apiKey, oauthToken, dockerClient)
+	return daemon.Run(globalCfg, apiKey, oauthToken)
 }
