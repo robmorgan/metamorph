@@ -305,6 +305,9 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 		RestartPolicy: container.RestartPolicy{
 			Name: container.RestartPolicyUnlessStopped,
 		},
+		LogConfig: container.LogConfig{
+			Type: "json-file",
+		},
 	}
 
 	resp, err := c.cli.ContainerCreate(ctx, config, hostConfig, nil, nil, containerName)
