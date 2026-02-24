@@ -168,7 +168,11 @@ ${AGENT_PROMPT}"
   fi
 
   # --- Static prompt mode (fallback when CONTROL_PLANE_URL is unset) ---
-  cat /SYSTEM_PROMPT.md /workspace/AGENT_PROMPT.md | envsubst > /tmp/AGENT_PROMPT.md
+  if [ -f /workspace/AGENT_PROMPT.md ]; then
+    cat /SYSTEM_PROMPT.md /workspace/AGENT_PROMPT.md | envsubst > /tmp/AGENT_PROMPT.md
+  else
+    cat /SYSTEM_PROMPT.md | envsubst > /tmp/AGENT_PROMPT.md
+  fi
 
   echo "[$(date)] Launching Claude Code (model: ${AGENT_MODEL})..." | tee -a "$LOG_FILE"
 

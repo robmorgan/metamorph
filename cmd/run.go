@@ -304,12 +304,15 @@ func runStaticPromptSession(role string, cfg *config.Config, repoPath, agentDir,
 	pullCmd.Dir = agentDir
 	_ = pullCmd.Run()
 
-	// Build prompt from system + user prompt.
+	// Build prompt from system + optional user prompt.
 	userPromptPath := repoPath + "/" + constants.AgentPromptFile
 	userPromptData, err := os.ReadFile(userPromptPath)
 	if err != nil {
-		slog.Error("failed to read user agent prompt", "error", err)
-		return
+		if !os.IsNotExist(err) {
+			slog.Error("failed to read user agent prompt", "error", err)
+			return
+		}
+		slog.Info("no AGENT_PROMPT.md found, using system prompt only")
 	}
 
 	combined := assets.SystemPrompt + "\n" + string(userPromptData)

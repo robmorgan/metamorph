@@ -217,12 +217,14 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 		upstreamMounts = []UpstreamMount{{Label: "", Path: upstreamAbs}}
 	}
 
+	// AGENT_PROMPT.md is optional — agents can work from tasks + system prompt alone.
 	agentPromptAbs, err := filepath.Abs(filepath.Join(opts.ProjectDir, constants.AgentPromptFile))
 	if err != nil {
 		return "", fmt.Errorf("docker: failed to resolve agent prompt path: %w", err)
 	}
+	hasAgentPrompt := true
 	if _, err := os.Stat(agentPromptAbs); os.IsNotExist(err) {
-		return "", fmt.Errorf("docker: %s not found in project directory (run 'metamorph project create' first)", constants.AgentPromptFile)
+		hasAgentPrompt = false
 	}
 
 	logDirSource := opts.LogDir
@@ -269,7 +271,7 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 		},
 	}
 
-	// Build mounts: upstream(s) + logs + agent prompt.
+	// Build mounts: upstream(s) + logs + optional agent prompt.
 	var mounts []mount.Mount
 	for _, um := range upstreamMounts {
 		absPath, err := filepath.Abs(um.Path)
@@ -292,13 +294,17 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 			Source: logDirAbs,
 			Target: "/workspace/logs",
 		},
-		mount.Mount{
-			Type:     mount.TypeBind,
-			Source:   agentPromptAbs,
-			Target:   "/workspace/AGENT_PROMPT.md",
-			ReadOnly: true,
-		},
 	)
+	if hasAgentPrompt {
+		mounts = append(mounts,
+			mount.Mount{
+				Type:     mount.TypeBind,
+				Source:   agentPromptAbs,
+				Target:   "/workspace/AGENT_PROMPT.md",
+				ReadOnly: true,
+			},
+		)
+	}
 
 	hostConfig := &container.HostConfig{
 		Mounts: mounts,
