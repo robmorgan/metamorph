@@ -30,10 +30,11 @@ export const api = {
 
   // Tasks
   listTasks: (params?: { status?: string; project?: string }) => {
-    const url = new URL(`${API_BASE}/tasks`)
-    if (params?.status) url.searchParams.set("status", params.status)
-    if (params?.project) url.searchParams.set("project", params.project)
-    return fetchJSON<unknown[]>(url.toString())
+    const query = new URLSearchParams()
+    if (params?.status) query.set("status", params.status)
+    if (params?.project) query.set("project", params.project)
+    const qs = query.toString()
+    return fetchJSON<unknown[]>(`${API_BASE}/tasks${qs ? `?${qs}` : ""}`)
   },
   getTask: (id: string) => fetchJSON<unknown>(`${API_BASE}/tasks/${id}`),
   createTask: (data: CreateTaskRequest) =>
