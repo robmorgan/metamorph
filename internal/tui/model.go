@@ -56,8 +56,9 @@ type Model struct {
 	// Mode.
 	mode        int
 	taskInput   taskInput
-	confirmTask string // task ID being confirmed
-	confirmAction string // "complete" or "delete"
+	confirmTask    string // task ID being confirmed
+	confirmAction  string // "complete", "delete", "start", or "stop"
+	confirmProject string // project name being confirmed (for start/stop)
 
 	// Project filter selection.
 	filterCursor int
@@ -183,6 +184,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeNormal
 		return m, fetchTasks(m.baseURL, m.projectFilter)
 
+	case projectStartedMsg:
+		if msg.err != nil {
+			m.lastErr = "start project: " + msg.err.Error()
+		}
+		return m, fetchProjects(m.baseURL)
+
+	case projectStoppedMsg:
+		if msg.err != nil {
+			m.lastErr = "stop project: " + msg.err.Error()
+		}
+		return m, fetchProjects(m.baseURL)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -306,6 +319,22 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirmAction = "delete"
 		}
 		return m, nil
+
+	case "s":
+		if m.projectFilter != "" {
+			// Determine current project status.
+			action := "start"
+			for _, p := range m.projects {
+				if p.Name == m.projectFilter && p.Status == "running" {
+					action = "stop"
+					break
+				}
+			}
+			m.mode = modeConfirm
+			m.confirmProject = m.projectFilter
+			m.confirmAction = action
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -374,13 +403,19 @@ func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "y", "Y":
-		taskID := m.confirmTask
 		action := m.confirmAction
 		m.mode = modeNormal
-		if action == "complete" {
-			return m, completeTask(m.baseURL, taskID)
+		switch action {
+		case "complete":
+			return m, completeTask(m.baseURL, m.confirmTask)
+		case "delete":
+			return m, deleteTask(m.baseURL, m.confirmTask)
+		case "start":
+			return m, startProject(m.baseURL, m.confirmProject)
+		case "stop":
+			return m, stopProject(m.baseURL, m.confirmProject)
 		}
-		return m, deleteTask(m.baseURL, taskID)
+		return m, nil
 
 	case "n", "N", "esc":
 		m.mode = modeNormal
@@ -498,7 +533,23 @@ func (m *Model) updateAgentsView() {
 	}
 
 	if len(lines) == 0 {
-		lines = append(lines, dimStyle.Render("  No agents running"))
+		if m.projectFilter != "" {
+			// Check if the filtered project is stopped.
+			stopped := true
+			for _, p := range m.projects {
+				if p.Name == m.projectFilter && p.Status == "running" {
+					stopped = false
+					break
+				}
+			}
+			if stopped {
+				lines = append(lines, dimStyle.Render("  Project stopped. Press 's' to start."))
+			} else {
+				lines = append(lines, dimStyle.Render("  No agents running"))
+			}
+		} else {
+			lines = append(lines, dimStyle.Render("  No agents running"))
+		}
 	}
 
 	m.viewports[panelAgents].SetContent(strings.Join(lines, "\n"))
@@ -606,6 +657,17 @@ func (m Model) View() string {
 	filterLabel := "All Projects"
 	if m.projectFilter != "" {
 		filterLabel = m.projectFilter
+		// Append project status.
+		for _, p := range m.projects {
+			if p.Name == m.projectFilter {
+				if p.Status == "running" {
+					filterLabel += " (running)"
+				} else {
+					filterLabel += " (stopped)"
+				}
+				break
+			}
+		}
 	}
 	activeCount := 0
 	for _, p := range m.projects {
@@ -701,7 +763,7 @@ func (m Model) renderStatusBar() string {
 	var left string
 	switch m.mode {
 	case modeNormal:
-		left = "  Tab:panel  p:project  a:add task  q:quit  ?:help"
+		left = "  Tab:panel  p:project  s:start/stop  a:add task  q:quit"
 	case modeAddTask:
 		left = "  Enter:submit  Esc:cancel"
 	case modeProjectFilter:
@@ -736,6 +798,18 @@ func (m Model) overlayProjectFilter(base string) string {
 		label := item
 		if item == "All" {
 			label = "All Projects"
+		} else {
+			// Show status badge.
+			for _, p := range m.projects {
+				if p.Name == item {
+					if p.Status == "running" {
+						label += "  " + lipgloss.NewStyle().Foreground(green).Render("running")
+					} else {
+						label += "  " + dimStyle.Render("stopped")
+					}
+					break
+				}
+			}
 		}
 		lines = append(lines, prefix+label)
 	}
@@ -758,19 +832,25 @@ func (m Model) overlayAddTask(base string) string {
 
 func (m Model) overlayConfirm(base string) string {
 	action := m.confirmAction
-	taskTitle := ""
-	for _, t := range m.tasks {
-		if t.ID == m.confirmTask {
-			taskTitle = t.Title
-			break
-		}
-	}
-
 	actionLabel := action
 	if len(actionLabel) > 0 {
 		actionLabel = strings.ToUpper(actionLabel[:1]) + actionLabel[1:]
 	}
-	prompt := fmt.Sprintf("%s task %q? (y/n)", actionLabel, taskTitle)
+
+	var prompt string
+	if action == "start" || action == "stop" {
+		prompt = fmt.Sprintf("%s project %q? (y/n)", actionLabel, m.confirmProject)
+	} else {
+		taskTitle := ""
+		for _, t := range m.tasks {
+			if t.ID == m.confirmTask {
+				taskTitle = t.Title
+				break
+			}
+		}
+		prompt = fmt.Sprintf("%s task %q? (y/n)", actionLabel, taskTitle)
+	}
+
 	overlay := overlayStyle.Render(prompt)
 	return placeOverlay(m.width, m.height, overlay, base)
 }

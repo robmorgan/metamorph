@@ -63,6 +63,16 @@ type taskDeletedMsg struct {
 	err    error
 }
 
+type projectStartedMsg struct {
+	project string
+	err     error
+}
+
+type projectStoppedMsg struct {
+	project string
+	err     error
+}
+
 type tickMsg time.Time
 
 // fetchProjects fetches the project list from the API.
@@ -311,6 +321,36 @@ func deleteTask(baseURL, taskID string) tea.Cmd {
 			return taskDeletedMsg{taskID: taskID, err: fmt.Errorf("status %d", resp.StatusCode)}
 		}
 		return taskDeletedMsg{taskID: taskID}
+	}
+}
+
+// startProject sends a POST to start a project.
+func startProject(baseURL, projectName string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := http.Post(baseURL+"/api/projects/"+projectName+"/start", "application/json", nil)
+		if err != nil {
+			return projectStartedMsg{project: projectName, err: err}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return projectStartedMsg{project: projectName, err: fmt.Errorf("status %d", resp.StatusCode)}
+		}
+		return projectStartedMsg{project: projectName}
+	}
+}
+
+// stopProject sends a POST to stop a project.
+func stopProject(baseURL, projectName string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := http.Post(baseURL+"/api/projects/"+projectName+"/stop", "application/json", nil)
+		if err != nil {
+			return projectStoppedMsg{project: projectName, err: err}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return projectStoppedMsg{project: projectName, err: fmt.Errorf("status %d", resp.StatusCode)}
+		}
+		return projectStoppedMsg{project: projectName}
 	}
 }
 
