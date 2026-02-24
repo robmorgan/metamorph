@@ -103,6 +103,7 @@ func (cp *ControlPlane) buildMux() http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/claim", cp.handleClaimTask)
 	mux.HandleFunc("POST /api/tasks/{id}/release", cp.handleReleaseTask)
 	mux.HandleFunc("POST /api/tasks/{id}/complete", cp.handleCompleteTask)
+	mux.HandleFunc("POST /api/tasks/next", cp.handleClaimNextTask)
 
 	// Message endpoints.
 	mux.HandleFunc("GET /api/messages", cp.handleListMessages)
@@ -338,6 +339,39 @@ func (cp *ControlPlane) handleCompleteTask(w http.ResponseWriter, r *http.Reques
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "done"})
+}
+
+type claimNextRequest struct {
+	AgentID int    `json:"agent_id"`
+	Role    string `json:"role"`
+	Project string `json:"project"`
+}
+
+func (cp *ControlPlane) handleClaimNextTask(w http.ResponseWriter, r *http.Request) {
+	var req claimNextRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+		return
+	}
+	if req.AgentID <= 0 {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("agent_id is required"))
+		return
+	}
+
+	cp.mu.Lock()
+	task, err := cp.store.ClaimNextTask(r.Context(), req.AgentID, req.Role, req.Project)
+	cp.mu.Unlock()
+
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if task == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, task)
 }
 
 func (cp *ControlPlane) handleUpdateTask(w http.ResponseWriter, r *http.Request) {

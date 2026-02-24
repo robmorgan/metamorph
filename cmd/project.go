@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/robmorgan/metamorph/internal/config"
@@ -238,43 +237,6 @@ Add project-specific instructions for your agents here.
 		fmt.Println("  Using existing PROGRESS.md")
 	}
 
-	// Create task lock directory in repo.
-	if err := os.MkdirAll(filepath.Join(absDir, constants.TaskLockDir), 0755); err != nil {
-		return fmt.Errorf("failed to create %s: %w", constants.TaskLockDir, err)
-	}
-	fmt.Printf("  Created %s/\n", constants.TaskLockDir)
-
-	// Append entries to .gitignore (create if missing, never overwrite).
-	gitignorePath := filepath.Join(absDir, ".gitignore")
-	requiredEntries := []string{"current_tasks/"}
-	existing, _ := os.ReadFile(gitignorePath)
-	existingStr := string(existing)
-	var toAdd []string
-	for _, entry := range requiredEntries {
-		if !strings.Contains(existingStr, entry) {
-			toAdd = append(toAdd, entry)
-		}
-	}
-	if len(toAdd) > 0 {
-		f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return fmt.Errorf("failed to open .gitignore: %w", err)
-		}
-		if len(existingStr) > 0 && !strings.HasSuffix(existingStr, "\n") {
-			_, _ = f.WriteString("\n")
-		}
-		for _, entry := range toAdd {
-			if _, err := f.WriteString(entry + "\n"); err != nil {
-				_ = f.Close()
-				return fmt.Errorf("failed to write .gitignore entry: %w", err)
-			}
-		}
-		_ = f.Close()
-		fmt.Println("  Updated .gitignore")
-	} else {
-		fmt.Println("  .gitignore already up to date")
-	}
-
 	fmt.Printf("\nProject %q initialized successfully!\n\n", projectName)
 	fmt.Println("Next steps:")
 	fmt.Printf("  1. Review and customize %s\n", configPath)
@@ -284,7 +246,8 @@ Add project-specific instructions for your agents here.
 	fmt.Println("  4. Set credentials (pick one):")
 	fmt.Println("       export CLAUDE_CODE_OAUTH_TOKEN=...   # Claude Pro/Max subscription")
 	fmt.Println("       export ANTHROPIC_API_KEY=sk-...       # Anthropic API key")
-	fmt.Println("  5. Start agents: metamorph start")
+	fmt.Println("  5. Start the daemon: metamorph start")
+	fmt.Println("  6. Add tasks: metamorph task add \"Implement feature X\"")
 
 	return nil
 }

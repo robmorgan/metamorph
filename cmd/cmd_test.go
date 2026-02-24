@@ -610,7 +610,7 @@ func TestStatusWithoutDaemon(t *testing.T) {
 	}
 }
 
-func TestTasksWithNoLocks(t *testing.T) {
+func TestTasksRequiresDaemon(t *testing.T) {
 	dir := testProjectWithUpstream(t)
 
 	oldWd, _ := os.Getwd()
@@ -619,27 +619,14 @@ func TestTasksWithNoLocks(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(oldWd) }()
 
-	// Capture stdout.
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
 	rootCmd.SetArgs([]string{"tasks"})
 	err := rootCmd.Execute()
 
-	_ = w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-	output := buf.String()
-
-	if err != nil {
-		t.Fatalf("tasks: %v", err)
+	if err == nil {
+		t.Fatal("expected error when daemon is not running")
 	}
-
-	if !strings.Contains(output, "No active task locks") {
-		t.Errorf("expected 'No active task locks' message, got: %q", output)
+	if !strings.Contains(err.Error(), "daemon is not running") {
+		t.Errorf("expected 'daemon is not running' error, got: %v", err)
 	}
 }
 

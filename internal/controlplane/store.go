@@ -87,6 +87,7 @@ type Store interface {
 	GetTask(ctx context.Context, taskID string) (*Task, error)
 	CreateTask(ctx context.Context, t Task) error
 	ClaimTask(ctx context.Context, taskID string, agentID int) error
+	ClaimNextTask(ctx context.Context, agentID int, role string, project string) (*Task, error)
 	ReleaseTask(ctx context.Context, taskID string, agentID int) error
 	CompleteTask(ctx context.Context, taskID string, summary string) error
 	UpdateTask(ctx context.Context, taskID string, updates TaskUpdate) error

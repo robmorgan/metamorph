@@ -644,6 +644,198 @@ func TestHTTPAutoGenerateID(t *testing.T) {
 	}
 }
 
+// --- ClaimNextTask Store Tests ---
+
+func TestClaimNextTaskPriority(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	store.RegisterProject(ctx, "proj")
+	store.CreateTask(ctx, Task{ID: "low", Title: "Low", Priority: 4, Project: "proj"})
+	store.CreateTask(ctx, Task{ID: "high", Title: "High", Priority: 0, Project: "proj"})
+	store.CreateTask(ctx, Task{ID: "med", Title: "Med", Priority: 2, Project: "proj"})
+
+	task, err := store.ClaimNextTask(ctx, 1, "developer", "proj")
+	if err != nil {
+		t.Fatalf("ClaimNextTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected a task, got nil")
+	}
+	if task.ID != "high" {
+		t.Errorf("expected highest priority task 'high', got %q", task.ID)
+	}
+	if task.Status != "claimed" {
+		t.Errorf("Status = %q, want claimed", task.Status)
+	}
+	if task.Assignee == nil || *task.Assignee != 1 {
+		t.Errorf("Assignee = %v, want 1", task.Assignee)
+	}
+}
+
+func TestClaimNextTaskRoleAffinity(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	store.RegisterProject(ctx, "proj")
+	// Both priority 2 but different role affinities.
+	store.CreateTask(ctx, Task{ID: "dev-task", Title: "Dev", Priority: 2, RoleAffinity: "developer", Project: "proj"})
+	store.CreateTask(ctx, Task{ID: "test-task", Title: "Test", Priority: 2, RoleAffinity: "tester", Project: "proj"})
+
+	// A tester agent should prefer the tester-affinity task.
+	task, err := store.ClaimNextTask(ctx, 1, "tester", "proj")
+	if err != nil {
+		t.Fatalf("ClaimNextTask: %v", err)
+	}
+	if task.ID != "test-task" {
+		t.Errorf("expected tester task, got %q", task.ID)
+	}
+}
+
+func TestClaimNextTaskProjectScope(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	store.RegisterProject(ctx, "proj-a")
+	store.RegisterProject(ctx, "proj-b")
+	store.CreateTask(ctx, Task{ID: "a1", Title: "A", Priority: 0, Project: "proj-a"})
+	store.CreateTask(ctx, Task{ID: "b1", Title: "B", Priority: 0, Project: "proj-b"})
+
+	task, err := store.ClaimNextTask(ctx, 1, "developer", "proj-b")
+	if err != nil {
+		t.Fatalf("ClaimNextTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected a task")
+	}
+	if task.ID != "b1" {
+		t.Errorf("expected b1, got %q", task.ID)
+	}
+}
+
+func TestClaimNextTaskDependencies(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	store.RegisterProject(ctx, "proj")
+	store.CreateTask(ctx, Task{ID: "dep", Title: "Dependency", Priority: 2, Project: "proj"})
+	store.CreateTask(ctx, Task{ID: "blocked", Title: "Blocked", Priority: 0, DependsOn: []string{"dep"}, Project: "proj"})
+	store.CreateTask(ctx, Task{ID: "free", Title: "Free", Priority: 1, Project: "proj"})
+
+	// Should skip "blocked" (higher priority) because its dep is not done.
+	task, err := store.ClaimNextTask(ctx, 1, "developer", "proj")
+	if err != nil {
+		t.Fatalf("ClaimNextTask: %v", err)
+	}
+	if task.ID != "free" {
+		t.Errorf("expected 'free', got %q", task.ID)
+	}
+
+	// Complete the dependency.
+	store.ClaimTask(ctx, "dep", 2)
+	store.CompleteTask(ctx, "dep", "done")
+
+	// Now "blocked" should be claimable (priority 0 < priority 1).
+	task, err = store.ClaimNextTask(ctx, 3, "developer", "proj")
+	if err != nil {
+		t.Fatalf("ClaimNextTask after dep done: %v", err)
+	}
+	if task.ID != "blocked" {
+		t.Errorf("expected 'blocked' after dep done, got %q", task.ID)
+	}
+}
+
+func TestClaimNextTaskEmpty(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	task, err := store.ClaimNextTask(ctx, 1, "developer", "proj")
+	if err != nil {
+		t.Fatalf("ClaimNextTask: %v", err)
+	}
+	if task != nil {
+		t.Errorf("expected nil, got task %q", task.ID)
+	}
+}
+
+func TestClaimNextTaskConcurrent(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	store.RegisterProject(ctx, "proj")
+	store.CreateTask(ctx, Task{ID: "race", Title: "Race", Priority: 0, Project: "proj"})
+
+	const numAgents = 10
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		winners []*Task
+	)
+
+	for i := 1; i <= numAgents; i++ {
+		wg.Add(1)
+		go func(agentID int) {
+			defer wg.Done()
+			task, err := store.ClaimNextTask(ctx, agentID, "developer", "proj")
+			if err != nil {
+				return
+			}
+			if task != nil {
+				mu.Lock()
+				winners = append(winners, task)
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if len(winners) != 1 {
+		t.Errorf("expected exactly 1 winner, got %d", len(winners))
+	}
+}
+
+// --- ClaimNextTask HTTP Tests ---
+
+func TestHTTPClaimNext(t *testing.T) {
+	_, ts := testServer(t)
+
+	http.Post(ts.URL+"/api/projects", "application/json",
+		bytes.NewBufferString(`{"name":"my-app"}`))
+	http.Post(ts.URL+"/api/tasks", "application/json",
+		bytes.NewBufferString(`{"id":"t1","title":"Build API","priority":1,"project":"my-app"}`))
+
+	resp, err := http.Post(ts.URL+"/api/tasks/next", "application/json",
+		bytes.NewBufferString(`{"agent_id":1,"role":"developer","project":"my-app"}`))
+	if err != nil {
+		t.Fatalf("POST /api/tasks/next: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var task Task
+	json.NewDecoder(resp.Body).Decode(&task)
+	if task.ID != "t1" {
+		t.Errorf("ID = %q, want t1", task.ID)
+	}
+	if task.Status != "claimed" {
+		t.Errorf("Status = %q, want claimed", task.Status)
+	}
+}
+
+func TestHTTPClaimNextEmpty(t *testing.T) {
+	_, ts := testServer(t)
+
+	resp, err := http.Post(ts.URL+"/api/tasks/next", "application/json",
+		bytes.NewBufferString(`{"agent_id":1,"role":"developer","project":"empty-proj"}`))
+	if err != nil {
+		t.Fatalf("POST /api/tasks/next: %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", resp.StatusCode)
+	}
+}
+
 func TestHTTPProjectCRUD(t *testing.T) {
 	_, ts := testServer(t)
 

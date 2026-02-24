@@ -54,6 +54,7 @@ type AgentOpts struct {
 	OAuthToken     string // Claude Code OAuth token (if set, preferred over APIKey)
 	GitAuthorName  string // Git author name for commits (optional)
 	GitAuthorEmail string // Git author email for commits (optional)
+	ProjectName     string // Project name (passed to container as PROJECT_NAME)
 	ControlPlaneURL string // Control plane URL (optional)
 	UpstreamPath   string // Deprecated: single upstream path (kept for backward compat)
 	UpstreamPaths  []UpstreamMount // Per-repo upstream mounts
@@ -254,6 +255,9 @@ func (c *Client) StartAgent(ctx context.Context, opts AgentOpts) (string, error)
 	}
 	if opts.ControlPlaneURL != "" {
 		env = append(env, "CONTROL_PLANE_URL="+opts.ControlPlaneURL)
+	}
+	if opts.ProjectName != "" {
+		env = append(env, "PROJECT_NAME="+opts.ProjectName)
 	}
 
 	config := &container.Config{

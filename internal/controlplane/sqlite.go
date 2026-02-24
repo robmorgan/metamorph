@@ -384,6 +384,76 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, taskID string, agentID int)
 	return err
 }
 
+// ClaimNextTask atomically claims the highest-priority open task for the given agent.
+// Priority: role affinity match first, then priority ASC, then created_at ASC.
+// Tasks with unfinished dependencies are skipped. Returns nil (not error) if no task available.
+func (s *SQLiteStore) ClaimNextTask(ctx context.Context, agentID int, role string, project string) (*Task, error) {
+	now := time.Now().UTC()
+
+	// Build the WHERE clause to find eligible tasks.
+	// A task is eligible if:
+	//   1. status = 'open'
+	//   2. project matches (if specified)
+	//   3. all dependencies are completed (depends_on is empty or all deps have status='done')
+	query := `UPDATE tasks SET status = 'claimed', assignee = ?, claimed_at = ?
+		WHERE id = (
+			SELECT t.id FROM tasks t
+			WHERE t.status = 'open'`
+
+	args := []interface{}{agentID, now}
+
+	if project != "" {
+		query += ` AND t.project = ?`
+		args = append(args, project)
+	}
+
+	// Skip tasks with unfinished dependencies.
+	query += ` AND NOT EXISTS (
+				SELECT 1 FROM tasks t2
+				WHERE t.depends_on != ''
+				AND (',' || t.depends_on || ',' LIKE '%,' || t2.id || ',%')
+				AND t2.status != 'done'
+			)`
+
+	// Order: role affinity match first, then priority, then created_at.
+	query += ` ORDER BY CASE WHEN t.role_affinity = ? THEN 0 ELSE 1 END, t.priority ASC, t.created_at ASC
+			LIMIT 1
+		)`
+
+	args = append(args, role)
+
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("controlplane: claim next task: %w", err)
+	}
+
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, nil // no task available
+	}
+
+	// Record history.
+	// Find the task we just claimed by looking for the one assigned to this agent most recently.
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, title, description, status, priority, assignee,
+		        role_affinity, project, repo, branch,
+		        claimed_at, created_at, completed_at,
+		        depends_on, notes
+		 FROM tasks WHERE status = 'claimed' AND assignee = ? AND claimed_at = ?
+		 ORDER BY claimed_at DESC LIMIT 1`, agentID, now)
+
+	t, err := scanTaskRow(row)
+	if err != nil {
+		return nil, fmt.Errorf("controlplane: claim next task (fetch): %w", err)
+	}
+
+	_, _ = s.db.ExecContext(ctx,
+		`INSERT INTO task_history (task_id, old_status, new_status, agent_id, notes)
+		 VALUES (?, 'open', 'claimed', ?, 'auto-claimed')`, t.ID, agentID)
+
+	return &t, nil
+}
+
 // ReleaseTask returns a claimed task to the open pool. Only the current assignee can release.
 func (s *SQLiteStore) ReleaseTask(ctx context.Context, taskID string, agentID int) error {
 	res, err := s.db.ExecContext(ctx,

@@ -1,3 +1,7 @@
+// Package tasks implements git-based task locking using lock files in
+// the current_tasks/ directory. Deprecated: use the control plane task
+// queue (internal/controlplane) instead. This package is kept for
+// backward compatibility and will be removed in a future release.
 package tasks
 
 import (

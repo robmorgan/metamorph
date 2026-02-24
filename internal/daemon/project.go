@@ -68,17 +68,18 @@ func (p *ProjectInstance) StartAgents(ctx context.Context) error {
 
 		slog.Info("starting agent", "project", p.Name, "agent", i, "role", role)
 		containerID, err := p.docker.StartAgent(ctx, docker.AgentOpts{
-			ProjectDir:     projectDir,
-			AgentID:        i,
-			Role:           role,
-			Model:          p.Config.Agents.Model,
-			APIKey:         p.apiKey,
-			OAuthToken:     p.oauthToken,
-			GitAuthorName:  p.Config.Git.AuthorName,
-			GitAuthorEmail: p.Config.Git.AuthorEmail,
+			ProjectDir:      projectDir,
+			AgentID:         i,
+			Role:            role,
+			Model:           p.Config.Agents.Model,
+			APIKey:          p.apiKey,
+			OAuthToken:      p.oauthToken,
+			GitAuthorName:   p.Config.Git.AuthorName,
+			GitAuthorEmail:  p.Config.Git.AuthorEmail,
+			ProjectName:     p.Name,
 			ControlPlaneURL: controlPlaneURL,
-			UpstreamPaths:  p.UpstreamRepoPaths(),
-			LogDir:         logDir,
+			UpstreamPaths:   p.UpstreamRepoPaths(),
+			LogDir:          logDir,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to start agent-%d: %w", i, err)

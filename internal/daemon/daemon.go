@@ -26,12 +26,10 @@ import (
 	"github.com/robmorgan/metamorph/internal/docker"
 	"github.com/robmorgan/metamorph/internal/gitops"
 	"github.com/robmorgan/metamorph/internal/notify"
-	"github.com/robmorgan/metamorph/internal/tasks"
 )
 
 const (
 	monitorInterval       = 30 * time.Second
-	staleTaskMaxAge       = 2 * time.Hour
 	startupTimeout        = 5 * time.Minute
 	shutdownTimeout       = 30 * time.Second
 	commitBatchInterval   = 60 * time.Second
@@ -468,8 +466,8 @@ func (d *Daemon) monitorProject(ctx context.Context, p *ProjectInstance, now tim
 		d.restartCrashedAgents(ctx, p, agents)
 	}
 
-	// Update task info.
-	d.updateTasks(p)
+	// Update task info from control plane.
+	d.updateTasksFromControlPlane(p)
 
 	// Count commits and notify.
 	d.countCommitsAndNotify(p, now)
@@ -479,9 +477,6 @@ func (d *Daemon) monitorProject(ctx context.Context, p *ProjectInstance, now tim
 		d.syncRepos(p)
 		p.hasNewCommits = false
 	}
-
-	// Clear stale task locks.
-	d.clearStaleTasksAndNotify(p, now)
 
 	// Check agent logs.
 	p.CheckAgentLogs(now)
@@ -529,17 +524,18 @@ func (d *Daemon) restartCrashedAgents(ctx context.Context, p *ProjectInstance, i
 		controlPlaneURL := fmt.Sprintf("http://host.docker.internal:%d", p.Config.ControlPlane.Port)
 		logDir := filepath.Join(p.AgentLogDir(), fmt.Sprintf("agent-%d", a.ID))
 		containerID, err := p.docker.StartAgent(ctx, docker.AgentOpts{
-			ProjectDir:     p.primaryRepoPath(),
-			AgentID:        a.ID,
-			Role:           a.Role,
-			Model:          p.Config.Agents.Model,
-			APIKey:         p.apiKey,
-			OAuthToken:     p.oauthToken,
-			GitAuthorName:  p.Config.Git.AuthorName,
-			GitAuthorEmail: p.Config.Git.AuthorEmail,
+			ProjectDir:      p.primaryRepoPath(),
+			AgentID:         a.ID,
+			Role:            a.Role,
+			Model:           p.Config.Agents.Model,
+			APIKey:          p.apiKey,
+			OAuthToken:      p.oauthToken,
+			GitAuthorName:   p.Config.Git.AuthorName,
+			GitAuthorEmail:  p.Config.Git.AuthorEmail,
+			ProjectName:     p.Name,
 			ControlPlaneURL: controlPlaneURL,
-			UpstreamPaths:  p.UpstreamRepoPaths(),
-			LogDir:         logDir,
+			UpstreamPaths:   p.UpstreamRepoPaths(),
+			LogDir:          logDir,
 		})
 		if err == nil {
 			a.ContainerID = containerID
@@ -557,22 +553,26 @@ func (d *Daemon) restartCrashedAgents(ctx context.Context, p *ProjectInstance, i
 	}
 }
 
-func (d *Daemon) updateTasks(p *ProjectInstance) {
-	upstreamPath := p.PrimaryUpstreamRepoPath()
-	locks, err := tasks.ListTasks(upstreamPath)
-	if err != nil {
+func (d *Daemon) updateTasksFromControlPlane(p *ProjectInstance) {
+	if d.cp == nil {
 		return
 	}
 
-	taskMap := make(map[int]string)
-	for _, lock := range locks {
-		taskMap[lock.AgentID] = lock.Name
-	}
-
+	ctx := context.Background()
 	for i := range p.Agents {
 		a := &p.Agents[i]
-		if name, ok := taskMap[a.ID]; ok {
-			a.CurrentTask = &name
+		agentID := a.ID
+		claimedTasks, err := d.cp.Store().ListTasks(ctx, controlplane.TaskFilter{
+			Status:     "claimed",
+			AssigneeID: &agentID,
+			Project:    p.Name,
+		})
+		if err != nil {
+			continue
+		}
+		if len(claimedTasks) > 0 {
+			title := claimedTasks[0].Title
+			a.CurrentTask = &title
 		} else {
 			a.CurrentTask = nil
 		}
@@ -633,25 +633,6 @@ func (d *Daemon) flushCommitBatch(p *ProjectInstance, now time.Time) {
 
 	p.pendingCommits = nil
 	p.commitBatchStart = time.Time{}
-}
-
-func (d *Daemon) clearStaleTasksAndNotify(p *ProjectInstance, now time.Time) {
-	upstreamPath := p.PrimaryUpstreamRepoPath()
-	cleared, err := tasks.ClearStaleTasks(upstreamPath, staleTaskMaxAge)
-	if err != nil {
-		return
-	}
-
-	for _, taskName := range cleared {
-		p.SendEvent(notify.Event{
-			Type:      notify.EventStaleLock,
-			Message:   fmt.Sprintf("stale task lock cleared: %s", taskName),
-			Timestamp: now,
-			Details: map[string]interface{}{
-				"task": taskName,
-			},
-		})
-	}
 }
 
 func (d *Daemon) syncRepos(p *ProjectInstance) {

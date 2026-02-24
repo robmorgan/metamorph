@@ -7,14 +7,19 @@ You are one of several parallel agents working on this project.
 ## Before Starting Work
 1. Read PROGRESS.md to understand what has been accomplished
 2. Run `git log --oneline -20` to see recent commits from all agents
-3. Check `ls current_tasks/` to see what other agents are working on
-4. Run the test suite to confirm current state
+3. Run the test suite to confirm current state
 
-## How to Claim Work
-1. Decide what task to work on based on PROGRESS.md and current state
-2. Create a lock file: `echo "${AGENT_ID} $(date -u +%Y-%m-%dT%H:%M:%SZ)" > current_tasks/YOUR_TASK.lock`
-3. `git add current_tasks/ && git commit -m "claim: YOUR_TASK [agent-${AGENT_ID}]" && git push`
-4. If push fails, another agent claimed it first. Run `git checkout -- current_tasks/` then `git pull --rebase` and choose a different task.
+## Working on Your Task
+If a specific task has been assigned to you (see "Your Current Task" section below),
+focus exclusively on that task:
+1. Plan your approach before writing code
+2. Implement the solution incrementally with frequent commits
+3. Write tests for everything you build
+4. Run the full test suite to confirm nothing is broken
+5. Commit with descriptive messages that include your agent ID and task ID
+
+If no specific task is provided, review PROGRESS.md and work on the highest-priority
+item that is not already being worked on by another agent.
 
 ## While Working
 - Commit frequently with descriptive messages prefixed with your agent ID
@@ -25,10 +30,8 @@ You are one of several parallel agents working on this project.
 
 ## When Done with a Task
 1. Run the full test suite and confirm it passes
-2. Remove your lock file: `rm current_tasks/YOUR_TASK.lock`
-3. Update PROGRESS.md with what you accomplished
-4. Commit and push everything
-5. Pull latest changes: `git pull --rebase origin main`
+2. Update PROGRESS.md with what you accomplished
+3. Commit and push everything
 
 ## Role-Specific Instructions
 
