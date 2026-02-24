@@ -195,6 +195,15 @@ var taskShowCmd = &cobra.Command{
 		if task.CompletedAt != nil {
 			fmt.Printf("Completed:   %s\n", task.CompletedAt.Format(time.RFC3339))
 		}
+		if task.EpicID != "" {
+			fmt.Printf("Epic:        %s\n", task.EpicID)
+		}
+		if task.PromptStatus != "" {
+			fmt.Printf("Prompt:      %s\n", task.PromptStatus)
+		}
+		if task.ExpandedPrompt != "" {
+			fmt.Printf("\n--- Expanded Prompt ---\n%s\n--- End Prompt ---\n", task.ExpandedPrompt)
+		}
 		if task.Notes != "" {
 			fmt.Printf("Notes:       %s\n", task.Notes)
 		}
@@ -235,6 +244,60 @@ var taskCompleteCmd = &cobra.Command{
 	},
 }
 
+var taskApproveCmd = &cobra.Command{
+	Use:   "approve <id>",
+	Short: "Approve a task's expanded prompt",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if !daemon.IsRunning() {
+			return fmt.Errorf("daemon is not running. Start it with: metamorph start")
+		}
+
+		taskID := args[0]
+
+		resp, err := http.Post(controlPlaneURL()+"/api/tasks/"+taskID+"/approve", "application/json", nil)
+		if err != nil {
+			return fmt.Errorf("failed to connect to control plane: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("failed to approve task (%d): %s", resp.StatusCode, string(respBody))
+		}
+
+		fmt.Printf("Task %s prompt approved\n", taskID)
+		return nil
+	},
+}
+
+var taskRejectCmd = &cobra.Command{
+	Use:   "reject <id>",
+	Short: "Reject a task's expanded prompt",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if !daemon.IsRunning() {
+			return fmt.Errorf("daemon is not running. Start it with: metamorph start")
+		}
+
+		taskID := args[0]
+
+		resp, err := http.Post(controlPlaneURL()+"/api/tasks/"+taskID+"/reject", "application/json", nil)
+		if err != nil {
+			return fmt.Errorf("failed to connect to control plane: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("failed to reject task (%d): %s", resp.StatusCode, string(respBody))
+		}
+
+		fmt.Printf("Task %s prompt rejected\n", taskID)
+		return nil
+	},
+}
+
 func init() {
 	taskListCmd.Flags().String("status", "", "Filter by status (open, claimed, done, all)")
 	taskListCmd.Flags().Bool("json", false, "Output as JSON")
@@ -249,6 +312,8 @@ func init() {
 	taskCmd.AddCommand(taskAddCmd)
 	taskCmd.AddCommand(taskShowCmd)
 	taskCmd.AddCommand(taskCompleteCmd)
+	taskCmd.AddCommand(taskApproveCmd)
+	taskCmd.AddCommand(taskRejectCmd)
 	rootCmd.AddCommand(taskCmd)
 }
 

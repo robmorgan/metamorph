@@ -47,6 +47,17 @@ func migrate(db *sql.DB) error {
 			created_at DATETIME DEFAULT (datetime('now'))
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_project_repos_path ON project_repos(path)`,
+		// Epics.
+		`CREATE TABLE IF NOT EXISTS epics (
+			id           TEXT PRIMARY KEY,
+			title        TEXT NOT NULL,
+			description  TEXT DEFAULT '',
+			status       TEXT DEFAULT 'open',
+			project      TEXT REFERENCES projects(name),
+			created_at   DATETIME DEFAULT (datetime('now')),
+			completed_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_epics_project ON epics(project, status)`,
 		// Tasks with project scope.
 		`CREATE TABLE IF NOT EXISTS tasks (
 			id            TEXT PRIMARY KEY,
@@ -99,6 +110,9 @@ func migrate(db *sql.DB) error {
 	addColumnIfMissing(db, "messages", "project", "TEXT DEFAULT ''")
 	addColumnIfMissing(db, "tasks", "repo", "TEXT DEFAULT ''")
 	addColumnIfMissing(db, "tasks", "branch", "TEXT DEFAULT ''")
+	addColumnIfMissing(db, "tasks", "epic_id", "TEXT DEFAULT ''")
+	addColumnIfMissing(db, "tasks", "expanded_prompt", "TEXT DEFAULT ''")
+	addColumnIfMissing(db, "tasks", "prompt_status", "TEXT DEFAULT ''")
 
 	return nil
 }
@@ -262,6 +276,7 @@ func (s *SQLiteStore) CountTasksByProject(ctx context.Context, project string) (
 func (s *SQLiteStore) ListTasks(ctx context.Context, filter TaskFilter) ([]Task, error) {
 	query := `SELECT id, title, description, status, priority, assignee,
 	                  role_affinity, project, repo, branch,
+	                  epic_id, expanded_prompt, prompt_status,
 	                  claimed_at, created_at, completed_at,
 	                  depends_on, notes
 	           FROM tasks WHERE 1=1`
@@ -282,6 +297,10 @@ func (s *SQLiteStore) ListTasks(ctx context.Context, filter TaskFilter) ([]Task,
 	if filter.Project != "" {
 		query += " AND project = ?"
 		args = append(args, filter.Project)
+	}
+	if filter.EpicID != "" {
+		query += " AND epic_id = ?"
+		args = append(args, filter.EpicID)
 	}
 
 	query += " ORDER BY priority ASC, created_at ASC"
@@ -308,6 +327,7 @@ func (s *SQLiteStore) GetTask(ctx context.Context, taskID string) (*Task, error)
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, title, description, status, priority, assignee,
 		        role_affinity, project, repo, branch,
+		        epic_id, expanded_prompt, prompt_status,
 		        claimed_at, created_at, completed_at,
 		        depends_on, notes
 		 FROM tasks WHERE id = ?`, taskID)
@@ -342,10 +362,14 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, t Task) error {
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO tasks (id, title, description, status, priority, assignee,
-		                    role_affinity, project, repo, branch, created_at, depends_on, notes)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                    role_affinity, project, repo, branch,
+		                    epic_id, expanded_prompt, prompt_status,
+		                    created_at, depends_on, notes)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.Title, t.Description, t.Status, t.Priority, nil,
-		t.RoleAffinity, project, t.Repo, t.Branch, t.CreatedAt, deps, t.Notes)
+		t.RoleAffinity, project, t.Repo, t.Branch,
+		t.EpicID, t.ExpandedPrompt, t.PromptStatus,
+		t.CreatedAt, deps, t.Notes)
 	if err != nil {
 		return fmt.Errorf("controlplane: create task: %w", err)
 	}
@@ -398,7 +422,8 @@ func (s *SQLiteStore) ClaimNextTask(ctx context.Context, agentID int, role strin
 	query := `UPDATE tasks SET status = 'claimed', assignee = ?, claimed_at = ?
 		WHERE id = (
 			SELECT t.id FROM tasks t
-			WHERE t.status = 'open'`
+			WHERE t.status = 'open'
+			AND (t.prompt_status = '' OR t.prompt_status = 'approved')`
 
 	args := []interface{}{agentID, now}
 
@@ -437,6 +462,7 @@ func (s *SQLiteStore) ClaimNextTask(ctx context.Context, agentID int, role strin
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, title, description, status, priority, assignee,
 		        role_affinity, project, repo, branch,
+		        epic_id, expanded_prompt, prompt_status,
 		        claimed_at, created_at, completed_at,
 		        depends_on, notes
 		 FROM tasks WHERE status = 'claimed' AND assignee = ? AND claimed_at = ?
@@ -523,6 +549,14 @@ func (s *SQLiteStore) UpdateTask(ctx context.Context, taskID string, updates Tas
 		setClauses = append(setClauses, "title = ?")
 		args = append(args, *updates.Title)
 	}
+	if updates.ExpandedPrompt != nil {
+		setClauses = append(setClauses, "expanded_prompt = ?")
+		args = append(args, *updates.ExpandedPrompt)
+	}
+	if updates.PromptStatus != nil {
+		setClauses = append(setClauses, "prompt_status = ?")
+		args = append(args, *updates.PromptStatus)
+	}
 
 	if len(setClauses) == 0 {
 		return nil
@@ -594,6 +628,126 @@ func (s *SQLiteStore) ListMessages(ctx context.Context, since time.Time, project
 	return msgs, rows.Err()
 }
 
+// --- Epic Operations ---
+
+// CreateEpic inserts a new epic.
+func (s *SQLiteStore) CreateEpic(ctx context.Context, e Epic) error {
+	if e.Status == "" {
+		e.Status = "open"
+	}
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = time.Now().UTC()
+	}
+
+	var project interface{} = e.Project
+	if e.Project == "" {
+		project = nil
+	}
+
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO epics (id, title, description, status, project, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		e.ID, e.Title, e.Description, e.Status, project, e.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("controlplane: create epic: %w", err)
+	}
+	return nil
+}
+
+// GetEpic returns a single epic by ID.
+func (s *SQLiteStore) GetEpic(ctx context.Context, epicID string) (*Epic, error) {
+	var e Epic
+	var project sql.NullString
+	var completedAt sql.NullTime
+
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, title, description, status, project, created_at, completed_at
+		 FROM epics WHERE id = ?`, epicID).
+		Scan(&e.ID, &e.Title, &e.Description, &e.Status, &project, &e.CreatedAt, &completedAt)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("controlplane: epic %q not found", epicID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("controlplane: get epic: %w", err)
+	}
+	if project.Valid {
+		e.Project = project.String
+	}
+	if completedAt.Valid {
+		e.CompletedAt = &completedAt.Time
+	}
+	return &e, nil
+}
+
+// ListEpics returns epics optionally filtered by project.
+func (s *SQLiteStore) ListEpics(ctx context.Context, project string) ([]Epic, error) {
+	query := `SELECT id, title, description, status, project, created_at, completed_at
+	           FROM epics WHERE 1=1`
+	var args []interface{}
+
+	if project != "" {
+		query += " AND project = ?"
+		args = append(args, project)
+	}
+
+	query += " ORDER BY created_at DESC"
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("controlplane: list epics: %w", err)
+	}
+	defer rows.Close()
+
+	var epics []Epic
+	for rows.Next() {
+		var e Epic
+		var proj sql.NullString
+		var completedAt sql.NullTime
+		if err := rows.Scan(&e.ID, &e.Title, &e.Description, &e.Status, &proj, &e.CreatedAt, &completedAt); err != nil {
+			return nil, fmt.Errorf("controlplane: scan epic: %w", err)
+		}
+		if proj.Valid {
+			e.Project = proj.String
+		}
+		if completedAt.Valid {
+			e.CompletedAt = &completedAt.Time
+		}
+		epics = append(epics, e)
+	}
+	return epics, rows.Err()
+}
+
+// UpdateEpicStatus updates the status of an epic. If the status is "done",
+// completed_at is set to the current time.
+func (s *SQLiteStore) UpdateEpicStatus(ctx context.Context, epicID, status string) error {
+	var res sql.Result
+	var err error
+
+	if status == "done" {
+		now := time.Now().UTC()
+		res, err = s.db.ExecContext(ctx,
+			`UPDATE epics SET status = ?, completed_at = ? WHERE id = ?`,
+			status, now, epicID)
+	} else {
+		res, err = s.db.ExecContext(ctx,
+			`UPDATE epics SET status = ? WHERE id = ?`,
+			status, epicID)
+	}
+	if err != nil {
+		return fmt.Errorf("controlplane: update epic status: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("controlplane: epic %q not found", epicID)
+	}
+	return nil
+}
+
+// ListTasksByEpic returns all tasks belonging to an epic.
+func (s *SQLiteStore) ListTasksByEpic(ctx context.Context, epicID string) ([]Task, error) {
+	return s.ListTasks(ctx, TaskFilter{EpicID: epicID})
+}
+
 // --- Scan helpers ---
 
 // scanTask scans a Task from sql.Rows.
@@ -603,9 +757,11 @@ func scanTask(rows *sql.Rows) (Task, error) {
 	var claimedAt, completedAt sql.NullTime
 	var deps, roleAffinity string
 	var project, repo, branch sql.NullString
+	var epicID, expandedPrompt, promptStatus sql.NullString
 
 	err := rows.Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority,
 		&assignee, &roleAffinity, &project, &repo, &branch,
+		&epicID, &expandedPrompt, &promptStatus,
 		&claimedAt, &t.CreatedAt, &completedAt,
 		&deps, &t.Notes)
 	if err != nil {
@@ -621,6 +777,15 @@ func scanTask(rows *sql.Rows) (Task, error) {
 	}
 	if branch.Valid {
 		t.Branch = branch.String
+	}
+	if epicID.Valid {
+		t.EpicID = epicID.String
+	}
+	if expandedPrompt.Valid {
+		t.ExpandedPrompt = expandedPrompt.String
+	}
+	if promptStatus.Valid {
+		t.PromptStatus = promptStatus.String
 	}
 	if assignee.Valid {
 		v := int(assignee.Int64)
@@ -646,9 +811,11 @@ func scanTaskRow(row *sql.Row) (Task, error) {
 	var claimedAt, completedAt sql.NullTime
 	var deps, roleAffinity string
 	var project, repo, branch sql.NullString
+	var epicID, expandedPrompt, promptStatus sql.NullString
 
 	err := row.Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority,
 		&assignee, &roleAffinity, &project, &repo, &branch,
+		&epicID, &expandedPrompt, &promptStatus,
 		&claimedAt, &t.CreatedAt, &completedAt,
 		&deps, &t.Notes)
 	if err != nil {
@@ -664,6 +831,15 @@ func scanTaskRow(row *sql.Row) (Task, error) {
 	}
 	if branch.Valid {
 		t.Branch = branch.String
+	}
+	if epicID.Valid {
+		t.EpicID = epicID.String
+	}
+	if expandedPrompt.Valid {
+		t.ExpandedPrompt = expandedPrompt.String
+	}
+	if promptStatus.Valid {
+		t.PromptStatus = promptStatus.String
 	}
 	if assignee.Valid {
 		v := int(assignee.Int64)

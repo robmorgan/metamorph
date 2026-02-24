@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/robmorgan/metamorph/internal/controlplane"
+	"github.com/robmorgan/metamorph/internal/llm"
 	"github.com/robmorgan/metamorph/web"
 	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
@@ -314,6 +315,13 @@ func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string) error {
 		}
 		return cfg.Project.Description
 	})
+
+	// Wire up epic service if an API key is available.
+	if d.apiKey != "" {
+		llmClient := llm.NewClient(d.apiKey)
+		epicSvc := controlplane.NewEpicService(store, llmClient)
+		d.cp.SetEpicService(epicSvc)
+	}
 
 	// Set up log streaming (must register handler before starting servers).
 	d.logStreamer = NewLogStreamer(500)

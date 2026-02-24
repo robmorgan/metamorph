@@ -90,6 +90,32 @@ type daemonRestartedMsg struct {
 	err error
 }
 
+type epicCreatedMsg struct {
+	epicID string
+	tasks  int
+	err    error
+}
+
+type taskApprovedMsg struct {
+	taskID string
+	err    error
+}
+
+type taskRejectedMsg struct {
+	taskID string
+	err    error
+}
+
+type epicApprovedMsg struct {
+	epicID string
+	err    error
+}
+
+type taskRegeneratedMsg struct {
+	taskID string
+	err    error
+}
+
 type tickMsg time.Time
 
 // fetchProjects fetches the project list from the API.
@@ -439,6 +465,94 @@ func drainLogChannel(ch <-chan string) tea.Cmd {
 				return daemonLogMsg{lines: lines}
 			}
 		}
+	}
+}
+
+// createEpic posts a new epic via the API, triggering LLM decomposition.
+func createEpic(baseURL, title, desc, project string) tea.Cmd {
+	return func() tea.Msg {
+		body := map[string]string{
+			"title":       title,
+			"description": desc,
+			"project":     project,
+		}
+		data, _ := json.Marshal(body)
+		resp, err := http.Post(baseURL+"/api/epics", "application/json", bytes.NewReader(data))
+		if err != nil {
+			return epicCreatedMsg{err: err}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			return epicCreatedMsg{err: fmt.Errorf("status %d", resp.StatusCode)}
+		}
+		var result struct {
+			Epic  struct{ ID string } `json:"epic"`
+			Tasks []struct{}          `json:"tasks"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return epicCreatedMsg{err: err}
+		}
+		return epicCreatedMsg{epicID: result.Epic.ID, tasks: len(result.Tasks)}
+	}
+}
+
+// approveTaskPrompt approves a single task's expanded prompt.
+func approveTaskPrompt(baseURL, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := http.Post(baseURL+"/api/tasks/"+taskID+"/approve", "application/json", nil)
+		if err != nil {
+			return taskApprovedMsg{taskID: taskID, err: err}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return taskApprovedMsg{taskID: taskID, err: fmt.Errorf("status %d", resp.StatusCode)}
+		}
+		return taskApprovedMsg{taskID: taskID}
+	}
+}
+
+// rejectTaskPrompt rejects a single task's expanded prompt.
+func rejectTaskPrompt(baseURL, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := http.Post(baseURL+"/api/tasks/"+taskID+"/reject", "application/json", nil)
+		if err != nil {
+			return taskRejectedMsg{taskID: taskID, err: err}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return taskRejectedMsg{taskID: taskID, err: fmt.Errorf("status %d", resp.StatusCode)}
+		}
+		return taskRejectedMsg{taskID: taskID}
+	}
+}
+
+// approveEpic bulk-approves all tasks in an epic.
+func approveEpic(baseURL, epicID string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := http.Post(baseURL+"/api/epics/"+epicID+"/approve", "application/json", nil)
+		if err != nil {
+			return epicApprovedMsg{epicID: epicID, err: err}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return epicApprovedMsg{epicID: epicID, err: fmt.Errorf("status %d", resp.StatusCode)}
+		}
+		return epicApprovedMsg{epicID: epicID}
+	}
+}
+
+// regenerateTaskPrompt re-expands a task's prompt via LLM.
+func regenerateTaskPrompt(baseURL, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := http.Post(baseURL+"/api/tasks/"+taskID+"/regenerate", "application/json", nil)
+		if err != nil {
+			return taskRegeneratedMsg{taskID: taskID, err: err}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return taskRegeneratedMsg{taskID: taskID, err: fmt.Errorf("status %d", resp.StatusCode)}
+		}
+		return taskRegeneratedMsg{taskID: taskID}
 	}
 }
 

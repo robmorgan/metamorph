@@ -5,23 +5,37 @@ import (
 	"time"
 )
 
+// Epic represents a high-level goal that decomposes into tasks via LLM.
+type Epic struct {
+	ID          string     `json:"id"`
+	Title       string     `json:"title"`
+	Description string     `json:"description,omitempty"`
+	Status      string     `json:"status"` // open, decomposing, review, active, done
+	Project     string     `json:"project"`
+	CreatedAt   time.Time  `json:"created_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
 // Task represents a unit of work in the broker.
 type Task struct {
-	ID           string     `json:"id"`
-	Title        string     `json:"title"`
-	Description  string     `json:"description,omitempty"`
-	Status       string     `json:"status"`        // open, claimed, done, blocked
-	Priority     int        `json:"priority"`       // 0=critical, 4=backlog
-	Assignee     *int       `json:"assignee"`       // agent ID
-	RoleAffinity string     `json:"role_affinity,omitempty"`
-	Project      string     `json:"project"`        // project name
-	Repo         string     `json:"repo,omitempty"`
-	Branch       string     `json:"branch,omitempty"`
-	ClaimedAt    *time.Time `json:"claimed_at,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	CompletedAt  *time.Time `json:"completed_at,omitempty"`
-	DependsOn    []string   `json:"depends_on,omitempty"`
-	Notes        string     `json:"notes,omitempty"`
+	ID             string     `json:"id"`
+	Title          string     `json:"title"`
+	Description    string     `json:"description,omitempty"`
+	Status         string     `json:"status"`        // open, claimed, done, blocked
+	Priority       int        `json:"priority"`       // 0=critical, 4=backlog
+	Assignee       *int       `json:"assignee"`       // agent ID
+	RoleAffinity   string     `json:"role_affinity,omitempty"`
+	Project        string     `json:"project"`        // project name
+	Repo           string     `json:"repo,omitempty"`
+	Branch         string     `json:"branch,omitempty"`
+	EpicID         string     `json:"epic_id,omitempty"`
+	ExpandedPrompt string     `json:"expanded_prompt,omitempty"`
+	PromptStatus   string     `json:"prompt_status,omitempty"` // "", pending_review, approved, rejected
+	ClaimedAt      *time.Time `json:"claimed_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	DependsOn      []string   `json:"depends_on,omitempty"`
+	Notes          string     `json:"notes,omitempty"`
 }
 
 // ProjectDetail is the enriched project response returned by the API.
@@ -41,15 +55,18 @@ type TaskFilter struct {
 	RoleAffinity string // filter by role_affinity (empty = all)
 	AssigneeID   *int   // filter by assignee (nil = all)
 	Project      string // filter by project (empty = all)
+	EpicID       string // filter by epic_id (empty = all)
 }
 
 // TaskUpdate holds mutable fields for PATCH /tasks/{id}.
 type TaskUpdate struct {
-	Status      *string `json:"status,omitempty"`
-	Priority    *int    `json:"priority,omitempty"`
-	Notes       *string `json:"notes,omitempty"`
-	Description *string `json:"description,omitempty"`
-	Title       *string `json:"title,omitempty"`
+	Status         *string `json:"status,omitempty"`
+	Priority       *int    `json:"priority,omitempty"`
+	Notes          *string `json:"notes,omitempty"`
+	Description    *string `json:"description,omitempty"`
+	Title          *string `json:"title,omitempty"`
+	ExpandedPrompt *string `json:"expanded_prompt,omitempty"`
+	PromptStatus   *string `json:"prompt_status,omitempty"`
 }
 
 // Message represents an inter-agent message.
@@ -91,6 +108,13 @@ type Store interface {
 	ReleaseTask(ctx context.Context, taskID string, agentID int) error
 	CompleteTask(ctx context.Context, taskID string, summary string) error
 	UpdateTask(ctx context.Context, taskID string, updates TaskUpdate) error
+
+	// Epic operations.
+	CreateEpic(ctx context.Context, e Epic) error
+	GetEpic(ctx context.Context, epicID string) (*Epic, error)
+	ListEpics(ctx context.Context, project string) ([]Epic, error)
+	UpdateEpicStatus(ctx context.Context, epicID, status string) error
+	ListTasksByEpic(ctx context.Context, epicID string) ([]Task, error)
 
 	// Messaging.
 	PostMessage(ctx context.Context, msg Message) error

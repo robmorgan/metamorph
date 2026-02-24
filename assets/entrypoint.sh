@@ -84,6 +84,7 @@ while true; do
     TASK_ID=$(echo "$TASK_BODY" | jq -r '.id // empty')
     TASK_TITLE=$(echo "$TASK_BODY" | jq -r '.title // empty')
     TASK_DESC=$(echo "$TASK_BODY" | jq -r '.description // empty')
+    TASK_EXPANDED=$(echo "$TASK_BODY" | jq -r '.expanded_prompt // empty')
 
     if [ -z "$TASK_ID" ]; then
       echo "[$(date)] ERROR: failed to parse task from response" | tee -a "$LOG_FILE"
@@ -93,12 +94,20 @@ while true; do
 
     echo "[$(date)] Claimed task $TASK_ID: $TASK_TITLE" | tee -a "$LOG_FILE"
 
+    # Prefer expanded_prompt over description for richer agent instructions.
+    if [ -n "$TASK_EXPANDED" ]; then
+      TASK_DETAIL="$TASK_EXPANDED"
+    else
+      TASK_DETAIL="$TASK_DESC"
+    fi
+
     # Build prompt: system prompt + task details + agent prompt.
     TASK_HEADER="
 ## Your Current Task
 - **Task ID**: ${TASK_ID}
 - **Title**: ${TASK_TITLE}
-- **Description**: ${TASK_DESC}
+
+${TASK_DETAIL}
 
 Focus on completing this specific task. Plan your approach, implement the solution, and write tests.
 When done, commit your changes with the task ID in the commit message.

@@ -17,6 +17,7 @@ import (
 // ControlPlane is the HTTP server that manages projects, tasks, and agents.
 type ControlPlane struct {
 	store                 Store
+	epicService           *EpicService
 	mu                    sync.Mutex
 	server                *http.Server
 	udsServer             *http.Server
@@ -132,6 +133,11 @@ func (cp *ControlPlane) SetStaticFS(fsys fs.FS) {
 	cp.staticFS = fsys
 }
 
+// SetEpicService sets the epic service for LLM-powered epic decomposition.
+func (cp *ControlPlane) SetEpicService(svc *EpicService) {
+	cp.epicService = svc
+}
+
 // Store returns the underlying Store for direct access (e.g. project resolution).
 func (cp *ControlPlane) Store() Store {
 	return cp.store
@@ -149,6 +155,18 @@ func (cp *ControlPlane) buildMux() http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/release", cp.handleReleaseTask)
 	mux.HandleFunc("POST /api/tasks/{id}/complete", cp.handleCompleteTask)
 	mux.HandleFunc("POST /api/tasks/next", cp.handleClaimNextTask)
+
+	// Task prompt review endpoints.
+	mux.HandleFunc("POST /api/tasks/{id}/approve", cp.handleApproveTaskPrompt)
+	mux.HandleFunc("POST /api/tasks/{id}/reject", cp.handleRejectTaskPrompt)
+	mux.HandleFunc("POST /api/tasks/{id}/regenerate", cp.handleRegenerateTaskPrompt)
+
+	// Epic endpoints.
+	mux.HandleFunc("POST /api/epics", cp.handleCreateEpic)
+	mux.HandleFunc("GET /api/epics", cp.handleListEpics)
+	mux.HandleFunc("GET /api/epics/{id}", cp.handleGetEpic)
+	mux.HandleFunc("GET /api/epics/{id}/tasks", cp.handleListEpicTasks)
+	mux.HandleFunc("POST /api/epics/{id}/approve", cp.handleApproveEpic)
 
 	// Message endpoints.
 	mux.HandleFunc("GET /api/messages", cp.handleListMessages)

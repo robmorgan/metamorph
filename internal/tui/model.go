@@ -27,6 +27,8 @@ const (
 	modeNormal = iota
 	modeProjectFilter
 	modeAddTask
+	modeAddEpic
+	modeReviewPrompt
 	modeConfirm
 )
 
@@ -59,9 +61,14 @@ type Model struct {
 	// Mode.
 	mode           int
 	taskInput      taskInput
+	epicInput      epicInput
 	confirmTask    string // task ID being confirmed
 	confirmAction  string // "complete", "delete", "start", or "stop"
 	confirmProject string // project name being confirmed (for start/stop)
+
+	// Prompt review state.
+	reviewViewport viewport.Model
+	reviewTaskID   string // task being reviewed
 
 	// Project filter selection.
 	filterCursor int
@@ -84,6 +91,7 @@ func NewModel(baseURL, projectFilter string) Model {
 		states:        make(map[string]*daemon.State),
 		agentLogs:     make(map[string][]logLine),
 		taskInput:     newTaskInput(),
+		epicInput:     newEpicInput(),
 		mode:          modeNormal,
 		logCh:         connectDaemonLog(),
 	}
@@ -224,14 +232,62 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, fetchProjects(m.baseURL)
 
+	case epicCreatedMsg:
+		if msg.err != nil {
+			m.lastErr = "create epic: " + msg.err.Error()
+		} else {
+			m.lastErr = ""
+		}
+		return m, fetchTasks(m.baseURL, m.projectFilter)
+
+	case taskApprovedMsg:
+		if msg.err != nil {
+			m.lastErr = "approve: " + msg.err.Error()
+		} else {
+			m.lastErr = ""
+		}
+		m.mode = modeNormal
+		return m, fetchTasks(m.baseURL, m.projectFilter)
+
+	case taskRejectedMsg:
+		if msg.err != nil {
+			m.lastErr = "reject: " + msg.err.Error()
+		} else {
+			m.lastErr = ""
+		}
+		m.mode = modeNormal
+		return m, fetchTasks(m.baseURL, m.projectFilter)
+
+	case epicApprovedMsg:
+		if msg.err != nil {
+			m.lastErr = "approve epic: " + msg.err.Error()
+		} else {
+			m.lastErr = ""
+		}
+		return m, fetchTasks(m.baseURL, m.projectFilter)
+
+	case taskRegeneratedMsg:
+		if msg.err != nil {
+			m.lastErr = "regenerate: " + msg.err.Error()
+		} else {
+			m.lastErr = ""
+		}
+		m.mode = modeNormal
+		return m, fetchTasks(m.baseURL, m.projectFilter)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
 
 	// Forward to active viewport or text input.
-	if m.mode == modeAddTask {
+	switch m.mode {
+	case modeAddTask:
 		var cmd tea.Cmd
 		m.taskInput, cmd = m.taskInput.Update(msg)
+		return m, cmd
+	case modeAddEpic:
+		var cmd tea.Cmd
+		m.epicInput, cmd = m.epicInput.Update(msg)
 		return m, cmd
 	}
 
@@ -249,6 +305,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case modeAddTask:
 		return m.handleAddTaskKey(msg)
+	case modeAddEpic:
+		return m.handleAddEpicKey(msg)
+	case modeReviewPrompt:
+		return m.handleReviewPromptKey(msg)
 	case modeProjectFilter:
 		return m.handleProjectFilterKey(msg)
 	case modeConfirm:
@@ -333,6 +393,39 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.taskInput.Focus()
 		return m, nil
 
+	case "e":
+		m.mode = modeAddEpic
+		m.epicInput.Focus()
+		return m, nil
+
+	case "r":
+		// Review expanded prompt for selected task.
+		if m.activePanel == panelTasks && len(m.tasks) > 0 {
+			task := m.tasks[m.taskCursor]
+			if task.ExpandedPrompt != "" || task.PromptStatus == "pending_review" {
+				m.mode = modeReviewPrompt
+				m.reviewTaskID = task.ID
+				m.reviewViewport = viewport.New(m.width-8, m.height-6)
+				prompt := task.ExpandedPrompt
+				if prompt == "" {
+					prompt = "(No expanded prompt available)"
+				}
+				header := fmt.Sprintf("Task: %s\nStatus: %s\n\n", task.Title, task.PromptStatus)
+				m.reviewViewport.SetContent(header + prompt)
+			}
+		}
+		return m, nil
+
+	case "y":
+		// Quick approve when on task panel.
+		if m.activePanel == panelTasks && len(m.tasks) > 0 {
+			task := m.tasks[m.taskCursor]
+			if task.PromptStatus == "pending_review" {
+				return m, approveTaskPrompt(m.baseURL, task.ID)
+			}
+		}
+		return m, nil
+
 	case "d":
 		if m.activePanel == panelTasks && len(m.tasks) > 0 {
 			task := m.tasks[m.taskCursor]
@@ -402,6 +495,67 @@ func (m Model) handleAddTaskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.taskInput, cmd = m.taskInput.Update(msg)
 	return m, cmd
+}
+
+func (m Model) handleAddEpicKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case "esc":
+		m.mode = modeNormal
+		m.epicInput.Blur()
+		return m, nil
+
+	case "tab":
+		m.epicInput.SwitchField()
+		return m, nil
+
+	case "enter":
+		title := m.epicInput.TitleValue()
+		if title == "" {
+			return m, nil
+		}
+		desc := m.epicInput.DescValue()
+		m.mode = modeNormal
+		m.epicInput.Blur()
+		return m, createEpic(m.baseURL, title, desc, m.projectFilter)
+	}
+
+	var cmd tea.Cmd
+	m.epicInput, cmd = m.epicInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) handleReviewPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case "esc":
+		m.mode = modeNormal
+		return m, nil
+
+	case "y":
+		m.mode = modeNormal
+		return m, approveTaskPrompt(m.baseURL, m.reviewTaskID)
+
+	case "n":
+		m.mode = modeNormal
+		return m, rejectTaskPrompt(m.baseURL, m.reviewTaskID)
+
+	case "g":
+		m.mode = modeNormal
+		return m, regenerateTaskPrompt(m.baseURL, m.reviewTaskID)
+
+	case "j", "down":
+		m.reviewViewport.LineDown(1)
+		return m, nil
+
+	case "k", "up":
+		m.reviewViewport.LineUp(1)
+		return m, nil
+	}
+
+	return m, nil
 }
 
 func (m Model) handleProjectFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -640,6 +794,20 @@ func (m *Model) updateTasksView() {
 
 		line := fmt.Sprintf("%s%s %s  %s", prefix, pBadge, title, status)
 
+		// Show prompt review badge.
+		if task.PromptStatus == "pending_review" {
+			line += " " + lipgloss.NewStyle().Foreground(yellow).Render("[review]")
+		} else if task.PromptStatus == "approved" {
+			line += " " + lipgloss.NewStyle().Foreground(green).Render("[ok]")
+		} else if task.PromptStatus == "rejected" {
+			line += " " + lipgloss.NewStyle().Foreground(red).Render("[rej]")
+		}
+
+		// Show epic badge.
+		if task.EpicID != "" {
+			line += " " + dimStyle.Render("[E]")
+		}
+
 		if task.Assignee != nil {
 			line += dimStyle.Render(fmt.Sprintf("  -> agent-%d", *task.Assignee))
 		}
@@ -653,7 +821,7 @@ func (m *Model) updateTasksView() {
 
 	lines = append(lines, "")
 	if m.activePanel == panelTasks {
-		lines = append(lines, dimStyle.Render("  (a)dd  (d)one  (x)delete"))
+		lines = append(lines, dimStyle.Render("  (a)dd  (e)pic  (r)eview  (y)approve  (d)one  (x)del"))
 	}
 
 	m.viewports[panelTasks].SetContent(strings.Join(lines, "\n"))
@@ -797,6 +965,10 @@ func (m Model) View() string {
 		view = m.overlayProjectFilter(view)
 	case modeAddTask:
 		view = m.overlayAddTask(view)
+	case modeAddEpic:
+		view = m.overlayAddEpic(view)
+	case modeReviewPrompt:
+		view = m.overlayReviewPrompt(view)
 	case modeConfirm:
 		view = m.overlayConfirm(view)
 	}
@@ -865,9 +1037,13 @@ func (m Model) renderStatusBar() string {
 	var left string
 	switch m.mode {
 	case modeNormal:
-		left = "  Tab:panel  1-4:panel  p:project  s:start/stop  R:restart  a:add task  q:quit"
+		left = "  Tab:panel  p:project  s:start/stop  a:task  e:epic  r:review  q:quit"
 	case modeAddTask:
 		left = "  Enter:submit  Esc:cancel"
+	case modeAddEpic:
+		left = "  Tab:switch field  Enter:submit  Esc:cancel"
+	case modeReviewPrompt:
+		left = "  [y] Approve  [n] Reject  [g] Regenerate  [Esc] Back"
 	case modeProjectFilter:
 		left = "  j/k:select  Enter:confirm  Esc:cancel"
 	case modeConfirm:
@@ -930,6 +1106,30 @@ func (m Model) overlayAddTask(base string) string {
 		lines[len(lines)-1] = inputLine
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m Model) overlayAddEpic(base string) string {
+	var lines []string
+	lines = append(lines, panelTitleStyle.Render("Create Epic (LLM decomposition)"))
+	lines = append(lines, "")
+	lines = append(lines, m.epicInput.View())
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("Tab: switch field  Enter: submit  Esc: cancel"))
+
+	overlay := overlayStyle.Render(strings.Join(lines, "\n"))
+	return placeOverlay(m.width, m.height, overlay, base)
+}
+
+func (m Model) overlayReviewPrompt(base string) string {
+	var lines []string
+	lines = append(lines, panelTitleStyle.Render("Review Expanded Prompt"))
+	lines = append(lines, "")
+	lines = append(lines, m.reviewViewport.View())
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("[y] Approve  [n] Reject  [g] Regenerate  [Esc] Back"))
+
+	overlay := overlayStyle.Width(m.width - 6).Render(strings.Join(lines, "\n"))
+	return placeOverlay(m.width, m.height, overlay, base)
 }
 
 func (m Model) overlayConfirm(base string) string {
