@@ -391,6 +391,18 @@ func (d *Daemon) StartProject(ctx context.Context, projectName string) error {
 
 	instance := NewProjectInstance(projectName, cfg, d.apiKey, d.oauthToken, dockerClient)
 
+	// Initialize upstream bare repos if they don't exist yet.
+	for _, repo := range cfg.Repos {
+		label := config.RepoLabel(repo)
+		upstreamPath := constants.UpstreamRepoPath(projectName, label)
+		if _, err := os.Stat(upstreamPath); os.IsNotExist(err) {
+			slog.Info("initializing upstream repo", "project", projectName, "repo", label)
+			if err := gitops.InitUpstream(repo.Path, upstreamPath); err != nil {
+				return fmt.Errorf("failed to init upstream for %q: %w", label, err)
+			}
+		}
+	}
+
 	// Build image.
 	slog.Info("building docker image", "project", projectName)
 	if err := dockerClient.BuildImage(instance.primaryRepoPath(), cfg.Docker.ExtraPackages); err != nil {
