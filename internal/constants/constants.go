@@ -20,7 +20,6 @@ const (
 // Per-project paths (under ~/.metamorph/projects/{name}/).
 const (
 	ProjectConfigFile = "config.json"
-	ProjectStateFile  = "state.json"
 	AgentLogDir       = "agent_logs"
 	ReposDir          = "repos"
 )

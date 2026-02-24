@@ -79,6 +79,8 @@ type Daemon struct {
 	projects        map[string]*ProjectInstance
 	mu              sync.Mutex
 	startedAt       time.Time
+	startupPhases   sync.Map // project name -> phase string
+	starting        sync.Map // project name -> bool (prevents double-start)
 }
 
 // Start launches the daemon as a background subprocess. It re-execs the
@@ -249,31 +251,6 @@ func Stop() error {
 	return nil
 }
 
-// GetStatus reads state.json for a project and verifies the daemon is actually running.
-func GetStatus(projectName string) (*State, error) {
-	statePath := filepath.Join(constants.ProjectDir(projectName), constants.ProjectStateFile)
-
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		return nil, fmt.Errorf("daemon: failed to read state: %w", err)
-	}
-
-	var state State
-	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("daemon: failed to parse state: %w", err)
-	}
-
-	if state.Status == "running" && !IsRunning() {
-		state.Status = "stopped"
-		for i := range state.Agents {
-			if state.Agents[i].Status == "running" {
-				state.Agents[i].Status = "stopped"
-			}
-		}
-	}
-
-	return &state, nil
-}
 
 // IsRunning checks if the daemon process is alive.
 func IsRunning() bool {
@@ -399,28 +376,29 @@ func (d *Daemon) getDockerClient() (docker.DockerClient, error) {
 	return d.docker, nil
 }
 
-// writeStartupProgress writes intermediate state during project startup.
-func writeStartupProgress(projectName, phase string) {
-	state := &State{
-		Status:       "starting",
-		StartupPhase: phase,
-		ProjectName:  projectName,
-		StartedAt:    time.Now().UTC(),
-	}
-	statePath := filepath.Join(constants.ProjectDir(projectName), constants.ProjectStateFile)
-	_ = writeStateToPath(statePath, state)
-}
-
 // StartProject starts agents for a named project.
+// The lock is released during slow operations (image build, agent start) to
+// avoid blocking other daemon operations.
 func (d *Daemon) StartProject(ctx context.Context, projectName string) error {
+	// Phase 1: check preconditions under lock, get docker client.
 	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	if _, exists := d.projects[projectName]; exists {
+		d.mu.Unlock()
 		return fmt.Errorf("project %q is already running", projectName)
 	}
-
+	if _, already := d.starting.LoadOrStore(projectName, true); already {
+		d.mu.Unlock()
+		return fmt.Errorf("project %q is already starting", projectName)
+	}
 	dockerClient, err := d.getDockerClient()
+	d.mu.Unlock()
+
+	// Clean up starting flag on exit.
+	defer func() {
+		d.starting.Delete(projectName)
+		d.startupPhases.Delete(projectName)
+	}()
+
 	if err != nil {
 		return err
 	}
@@ -432,8 +410,10 @@ func (d *Daemon) StartProject(ctx context.Context, projectName string) error {
 
 	instance := NewProjectInstance(projectName, cfg, d.apiKey, d.oauthToken, dockerClient)
 
+	// Phase 2: slow operations without lock.
+
 	// Initialize upstream bare repos if they don't exist yet.
-	writeStartupProgress(projectName, "Initializing repos...")
+	d.startupPhases.Store(projectName, "Initializing repos...")
 	for _, repo := range cfg.Repos {
 		label := config.RepoLabel(repo)
 		upstreamPath := constants.UpstreamRepoPath(projectName, label)
@@ -446,40 +426,43 @@ func (d *Daemon) StartProject(ctx context.Context, projectName string) error {
 	}
 
 	// Build image.
-	writeStartupProgress(projectName, "Building Docker image...")
+	d.startupPhases.Store(projectName, "Building Docker image...")
 	slog.Info("building docker image", "project", projectName)
 	if err := dockerClient.BuildImage(instance.primaryRepoPath(), cfg.Docker.ExtraPackages); err != nil {
 		return fmt.Errorf("failed to build image: %w", err)
 	}
 
 	// Start agents.
-	writeStartupProgress(projectName, "Starting agents...")
+	d.startupPhases.Store(projectName, "Starting agents...")
 	slog.Info("starting agents", "project", projectName, "count", cfg.Agents.Count)
 	if err := instance.StartAgents(ctx); err != nil {
 		return fmt.Errorf("failed to start agents: %w", err)
 	}
 
-	// Write state.
-	if err := instance.WriteState(); err != nil {
-		return fmt.Errorf("failed to write state: %w", err)
-	}
+	// Store initial snapshot.
+	instance.storeSnapshot()
 
+	// Phase 3: register under lock.
+	d.mu.Lock()
 	d.projects[projectName] = instance
+	d.mu.Unlock()
+
 	return nil
 }
 
 // StopProject stops agents for a named project.
+// The lock is released during slow Docker operations.
 func (d *Daemon) StopProject(ctx context.Context, projectName string) error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	instance, exists := d.projects[projectName]
 	if !exists {
+		d.mu.Unlock()
 		return fmt.Errorf("project %q is not running", projectName)
 	}
+	delete(d.projects, projectName)
+	d.mu.Unlock()
 
 	instance.StopAgents(ctx)
-	delete(d.projects, projectName)
 	return nil
 }
 
@@ -540,8 +523,8 @@ func (d *Daemon) monitorProject(ctx context.Context, p *ProjectInstance, now tim
 	// Flush commit batch.
 	d.flushCommitBatch(p, now)
 
-	// Write state.
-	_ = p.WriteState()
+	// Store snapshot for API reads.
+	p.storeSnapshot()
 }
 
 func (d *Daemon) updateAgentStates(p *ProjectInstance, infos []docker.AgentInfo) {
@@ -771,50 +754,56 @@ func (d *Daemon) shutdown(ctx context.Context) error {
 }
 
 // handleProjectState serves GET /api/projects/{name}/state with daemon agent state.
+// It returns state from three sources in priority order:
+//  1. Running instance → atomic snapshot (lock-free)
+//  2. Starting instance → startup phase from sync.Map
+//  3. Config exists → stopped agents from config
+//  4. Otherwise → 404
 func (d *Daemon) handleProjectState(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
-	state, err := GetStatus(name)
-	if err != nil {
+	// 1. Check for a running project instance.
+	d.mu.Lock()
+	instance := d.projects[name]
+	d.mu.Unlock()
+
+	if instance != nil {
+		if snap := instance.snapshot(); snap != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(snap)
+			return
+		}
+	}
+
+	// 2. Check if the project is currently starting.
+	if phase, ok := d.startupPhases.Load(name); ok {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		json.NewEncoder(w).Encode(&State{
+			Status:       "starting",
+			StartupPhase: phase.(string),
+			ProjectName:  name,
+		})
 		return
 	}
 
+	// 3. Fall back to config-based agent list for stopped/never-started projects.
+	cfg, err := config.LoadProject(name)
+	if err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(&State{
+			Status:      "stopped",
+			ProjectName: name,
+			Agents:      AgentsFromConfig(cfg),
+		})
+		return
+	}
+
+	// 4. Project not found.
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(state)
+	w.WriteHeader(http.StatusNotFound)
+	json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("project %q not found", name)})
 }
 
-// writeStateToPath writes state to a specific path atomically.
-func writeStateToPath(path string, state *State) error {
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("daemon: failed to marshal state: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("daemon: failed to create state dir: %w", err)
-	}
-
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("daemon: failed to write temp state: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("daemon: failed to rename state: %w", err)
-	}
-
-	return nil
-}
-
-// WriteState writes a State to a project's state file.
-func WriteState(projectName string, state *State) error {
-	path := filepath.Join(constants.ProjectDir(projectName), constants.ProjectStateFile)
-	return writeStateToPath(path, state)
-}
 
 // readPID reads and parses the PID from a file.
 func readPID(path string) (int, error) {
@@ -867,6 +856,24 @@ func normalizeStatus(dockerStatus string) string {
 	default:
 		return "unknown"
 	}
+}
+
+// AgentsFromConfig generates a stopped agent list from project config using
+// the same round-robin role assignment as StartAgents.
+func AgentsFromConfig(cfg *config.Config) []AgentState {
+	agents := make([]AgentState, 0, cfg.Agents.Count)
+	for i := 1; i <= cfg.Agents.Count; i++ {
+		role := "developer"
+		if len(cfg.Agents.Roles) > 0 {
+			role = cfg.Agents.Roles[(i-1)%len(cfg.Agents.Roles)]
+		}
+		agents = append(agents, AgentState{
+			ID:     i,
+			Role:   role,
+			Status: "stopped",
+		})
+	}
+	return agents
 }
 
 // Helper functions used by project.go

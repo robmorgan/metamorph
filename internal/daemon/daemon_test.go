@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
@@ -75,207 +74,132 @@ func setupTestHome(t *testing.T) string {
 	return dir
 }
 
-// --- State Serialization Tests ---
+// --- AgentsFromConfig Tests ---
 
-func TestWriteStateToPath(t *testing.T) {
-	t.Run("writes valid JSON", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, "state.json")
+func TestAgentsFromConfig(t *testing.T) {
+	t.Run("round-robin role assignment", func(t *testing.T) {
+		cfg := &config.Config{
+			Agents: config.AgentsConfig{
+				Count: 5,
+				Roles: []string{"developer", "tester", "reviewer"},
+			},
+		}
 
+		agents := AgentsFromConfig(cfg)
+		if len(agents) != 5 {
+			t.Fatalf("len(agents) = %d, want 5", len(agents))
+		}
+
+		wantRoles := []string{"developer", "tester", "reviewer", "developer", "tester"}
+		for i, a := range agents {
+			if a.ID != i+1 {
+				t.Errorf("agents[%d].ID = %d, want %d", i, a.ID, i+1)
+			}
+			if a.Role != wantRoles[i] {
+				t.Errorf("agents[%d].Role = %q, want %q", i, a.Role, wantRoles[i])
+			}
+			if a.Status != "stopped" {
+				t.Errorf("agents[%d].Status = %q, want stopped", i, a.Status)
+			}
+		}
+	})
+
+	t.Run("defaults to developer when no roles", func(t *testing.T) {
+		cfg := &config.Config{
+			Agents: config.AgentsConfig{
+				Count: 2,
+				Roles: nil,
+			},
+		}
+
+		agents := AgentsFromConfig(cfg)
+		if len(agents) != 2 {
+			t.Fatalf("len(agents) = %d, want 2", len(agents))
+		}
+		for i, a := range agents {
+			if a.Role != "developer" {
+				t.Errorf("agents[%d].Role = %q, want developer", i, a.Role)
+			}
+		}
+	})
+
+	t.Run("zero agents", func(t *testing.T) {
+		cfg := &config.Config{
+			Agents: config.AgentsConfig{Count: 0},
+		}
+
+		agents := AgentsFromConfig(cfg)
+		if len(agents) != 0 {
+			t.Errorf("len(agents) = %d, want 0", len(agents))
+		}
+	})
+}
+
+// --- ProjectInstance Snapshot Tests ---
+
+func TestProjectInstanceSnapshot(t *testing.T) {
+	t.Run("returns nil before first store", func(t *testing.T) {
+		p := &ProjectInstance{Name: "test"}
+		if snap := p.snapshot(); snap != nil {
+			t.Errorf("expected nil snapshot, got %+v", snap)
+		}
+	})
+
+	t.Run("stores and retrieves snapshot", func(t *testing.T) {
 		taskName := "implement-auth"
-		state := &State{
-			Status:      "running",
-			StartedAt:   time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
-			ProjectName: "test-project",
+		p := &ProjectInstance{
+			Name:      "test",
+			startedAt: time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 			Agents: []AgentState{
-				{
-					ID:                1,
-					Role:              "developer",
-					ContainerID:       "abc123",
-					Status:            "running",
-					SessionsCompleted: 3,
-					LastActivity:      time.Date(2025, 6, 15, 11, 0, 0, 0, time.UTC),
-					CurrentTask:       &taskName,
-				},
-			},
-			Stats: Stats{
-				TotalCommits:   42,
-				TotalSessions:  10,
-				TasksCompleted: 5,
-				UptimeSeconds:  3600,
+				{ID: 1, Role: "developer", Status: "running", CurrentTask: &taskName},
+				{ID: 2, Role: "tester", Status: "running", CurrentTask: nil},
 			},
 		}
 
-		if err := writeStateToPath(path, state); err != nil {
-			t.Fatalf("writeStateToPath: %v", err)
-		}
+		p.storeSnapshot()
+		snap := p.snapshot()
 
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile: %v", err)
+		if snap == nil {
+			t.Fatal("expected non-nil snapshot")
 		}
-
-		var got State
-		if err := json.Unmarshal(data, &got); err != nil {
-			t.Fatalf("Unmarshal: %v", err)
+		if snap.Status != "running" {
+			t.Errorf("Status = %q, want running", snap.Status)
 		}
-
-		if got.Status != "running" {
-			t.Errorf("Status = %q, want %q", got.Status, "running")
+		if snap.ProjectName != "test" {
+			t.Errorf("ProjectName = %q, want test", snap.ProjectName)
 		}
-		if got.ProjectName != "test-project" {
-			t.Errorf("ProjectName = %q", got.ProjectName)
+		if len(snap.Agents) != 2 {
+			t.Fatalf("len(Agents) = %d, want 2", len(snap.Agents))
 		}
-		if len(got.Agents) != 1 {
-			t.Fatalf("len(Agents) = %d, want 1", len(got.Agents))
+		if snap.Agents[0].CurrentTask == nil || *snap.Agents[0].CurrentTask != "implement-auth" {
+			t.Errorf("Agent[0].CurrentTask = %v", snap.Agents[0].CurrentTask)
 		}
-		if got.Agents[0].ID != 1 {
-			t.Errorf("Agent.ID = %d", got.Agents[0].ID)
-		}
-		if got.Agents[0].ContainerID != "abc123" {
-			t.Errorf("Agent.ContainerID = %q", got.Agents[0].ContainerID)
-		}
-		if got.Agents[0].CurrentTask == nil || *got.Agents[0].CurrentTask != "implement-auth" {
-			t.Errorf("Agent.CurrentTask = %v", got.Agents[0].CurrentTask)
-		}
-		if got.Stats.TotalCommits != 42 {
-			t.Errorf("Stats.TotalCommits = %d", got.Stats.TotalCommits)
-		}
-		if got.Stats.UptimeSeconds != 3600 {
-			t.Errorf("Stats.UptimeSeconds = %d", got.Stats.UptimeSeconds)
+		if snap.Agents[1].CurrentTask != nil {
+			t.Errorf("Agent[1].CurrentTask = %v, want nil", snap.Agents[1].CurrentTask)
 		}
 	})
 
-	t.Run("creates parent directories", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, "sub", "dir", "state.json")
-
-		state := &State{Status: "running", ProjectName: "proj"}
-		if err := writeStateToPath(path, state); err != nil {
-			t.Fatalf("writeStateToPath: %v", err)
-		}
-
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("state file not created: %v", err)
-		}
-	})
-
-	t.Run("atomic write does not corrupt on overwrite", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, "state.json")
-
-		state1 := &State{Status: "running", ProjectName: "v1"}
-		if err := writeStateToPath(path, state1); err != nil {
-			t.Fatalf("writeStateToPath v1: %v", err)
-		}
-
-		state2 := &State{Status: "stopped", ProjectName: "v2"}
-		if err := writeStateToPath(path, state2); err != nil {
-			t.Fatalf("writeStateToPath v2: %v", err)
-		}
-
-		data, _ := os.ReadFile(path)
-		var got State
-		_ = json.Unmarshal(data, &got)
-		if got.Status != "stopped" || got.ProjectName != "v2" {
-			t.Errorf("got Status=%q ProjectName=%q, want stopped/v2", got.Status, got.ProjectName)
-		}
-	})
-
-	t.Run("no temp file left behind", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, "state.json")
-
-		_ = writeStateToPath(path, &State{Status: "running"})
-
-		tmpPath := path + ".tmp"
-		if _, err := os.Stat(tmpPath); err == nil {
-			t.Error("temp file should be removed after rename")
-		}
-	})
-}
-
-func TestWriteState(t *testing.T) {
-	home := setupTestHome(t)
-
-	state := &State{Status: "running", ProjectName: "my-proj"}
-	if err := WriteState("my-proj", state); err != nil {
-		t.Fatalf("WriteState: %v", err)
-	}
-
-	expected := filepath.Join(home, ".metamorph", "projects", "my-proj", "state.json")
-	data, err := os.ReadFile(expected)
-	if err != nil {
-		t.Fatalf("state file not at expected path %s: %v", expected, err)
-	}
-
-	var got State
-	_ = json.Unmarshal(data, &got)
-	if got.ProjectName != "my-proj" {
-		t.Errorf("ProjectName = %q, want my-proj", got.ProjectName)
-	}
-}
-
-func TestStateJSONRoundTrip(t *testing.T) {
-	taskName := "fix-tests"
-	original := &State{
-		Status:      "running",
-		StartedAt:   time.Date(2025, 3, 10, 8, 30, 0, 0, time.UTC),
-		ProjectName: "metamorph",
-		Agents: []AgentState{
-			{
-				ID:                1,
-				Role:              "developer",
-				ContainerID:       "cid-111",
-				Status:            "running",
-				SessionsCompleted: 5,
-				LastActivity:      time.Date(2025, 3, 10, 9, 0, 0, 0, time.UTC),
-				CurrentTask:       &taskName,
+	t.Run("deep copies CurrentTask pointer", func(t *testing.T) {
+		taskName := "original-task"
+		p := &ProjectInstance{
+			Name: "test",
+			Agents: []AgentState{
+				{ID: 1, Role: "developer", Status: "running", CurrentTask: &taskName},
 			},
-			{
-				ID:          2,
-				Role:        "tester",
-				ContainerID: "cid-222",
-				Status:      "exited",
-				CurrentTask: nil,
-			},
-		},
-		Stats: Stats{
-			TotalCommits:   100,
-			TotalSessions:  25,
-			TasksCompleted: 12,
-			UptimeSeconds:  7200,
-		},
-	}
+		}
 
-	data, err := json.MarshalIndent(original, "", "  ")
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
+		p.storeSnapshot()
+		snap := p.snapshot()
 
-	var decoded State
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
+		// Mutate the original.
+		newTask := "mutated-task"
+		p.Agents[0].CurrentTask = &newTask
 
-	if decoded.Status != original.Status {
-		t.Errorf("Status = %q, want %q", decoded.Status, original.Status)
-	}
-	if !decoded.StartedAt.Equal(original.StartedAt) {
-		t.Errorf("StartedAt = %v, want %v", decoded.StartedAt, original.StartedAt)
-	}
-	if len(decoded.Agents) != 2 {
-		t.Fatalf("len(Agents) = %d, want 2", len(decoded.Agents))
-	}
-	if decoded.Agents[0].CurrentTask == nil || *decoded.Agents[0].CurrentTask != taskName {
-		t.Errorf("Agent[0].CurrentTask = %v", decoded.Agents[0].CurrentTask)
-	}
-	if decoded.Agents[1].CurrentTask != nil {
-		t.Errorf("Agent[1].CurrentTask = %v, want nil", decoded.Agents[1].CurrentTask)
-	}
-	if decoded.Stats != original.Stats {
-		t.Errorf("Stats = %+v, want %+v", decoded.Stats, original.Stats)
-	}
+		// Snapshot should still have the original value.
+		if snap.Agents[0].CurrentTask == nil || *snap.Agents[0].CurrentTask != "original-task" {
+			t.Errorf("snapshot was mutated: CurrentTask = %v", snap.Agents[0].CurrentTask)
+		}
+	})
 }
 
 // --- PID Management Tests ---
@@ -395,107 +319,6 @@ func TestIsRunning(t *testing.T) {
 	})
 }
 
-// --- GetStatus Tests ---
-
-func TestGetStatus(t *testing.T) {
-	t.Run("reads state and reports running when alive", func(t *testing.T) {
-		home := setupTestHome(t)
-
-		state := &State{
-			Status:      "running",
-			ProjectName: "proj",
-			Agents: []AgentState{
-				{ID: 1, Role: "developer", Status: "running"},
-			},
-		}
-		if err := WriteState("proj", state); err != nil {
-			t.Fatalf("WriteState: %v", err)
-		}
-
-		// Write PID file with our own PID (so it looks alive).
-		globalDir := filepath.Join(home, ".metamorph")
-		pidPath := filepath.Join(globalDir, constants.DaemonPIDFile)
-		_ = os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644)
-
-		got, err := GetStatus("proj")
-		if err != nil {
-			t.Fatalf("GetStatus: %v", err)
-		}
-		if got.Status != "running" {
-			t.Errorf("Status = %q, want running", got.Status)
-		}
-		if got.ProjectName != "proj" {
-			t.Errorf("ProjectName = %q", got.ProjectName)
-		}
-	})
-
-	t.Run("marks stopped when PID is stale", func(t *testing.T) {
-		home := setupTestHome(t)
-
-		state := &State{
-			Status:      "running",
-			ProjectName: "proj",
-			Agents: []AgentState{
-				{ID: 1, Role: "developer", Status: "running"},
-				{ID: 2, Role: "tester", Status: "running"},
-				{ID: 3, Role: "developer", Status: "error"},
-			},
-		}
-		if err := WriteState("proj", state); err != nil {
-			t.Fatalf("WriteState: %v", err)
-		}
-
-		// Write stale PID file.
-		globalDir := filepath.Join(home, ".metamorph")
-		_ = os.MkdirAll(globalDir, 0755)
-		pidPath := filepath.Join(globalDir, constants.DaemonPIDFile)
-		_ = os.WriteFile(pidPath, []byte("999999"), 0644)
-
-		got, err := GetStatus("proj")
-		if err != nil {
-			t.Fatalf("GetStatus: %v", err)
-		}
-		if got.Status != "stopped" {
-			t.Errorf("Status = %q, want stopped (stale PID)", got.Status)
-		}
-		for _, a := range got.Agents {
-			if a.Status == "running" {
-				t.Errorf("agent-%d Status = %q, want stopped when daemon is dead", a.ID, a.Status)
-			}
-		}
-		if got.Agents[2].Status != "error" {
-			t.Errorf("agent-3 Status = %q, want error (should be preserved)", got.Agents[2].Status)
-		}
-	})
-
-	t.Run("returns error when state file missing", func(t *testing.T) {
-		setupTestHome(t)
-
-		_, err := GetStatus("nonexistent")
-		if err == nil {
-			t.Fatal("expected error when state file missing")
-		}
-		if !strings.Contains(err.Error(), "failed to read state") {
-			t.Errorf("unexpected error: %v", err)
-		}
-	})
-
-	t.Run("returns error for corrupt JSON", func(t *testing.T) {
-		home := setupTestHome(t)
-
-		statePath := filepath.Join(home, ".metamorph", "projects", "bad", constants.ProjectStateFile)
-		_ = os.MkdirAll(filepath.Dir(statePath), 0755)
-		_ = os.WriteFile(statePath, []byte("{invalid json"), 0644)
-
-		_, err := GetStatus("bad")
-		if err == nil {
-			t.Fatal("expected error for corrupt JSON")
-		}
-		if !strings.Contains(err.Error(), "failed to parse state") {
-			t.Errorf("unexpected error: %v", err)
-		}
-	})
-}
 
 // --- readDaemonLogHint Tests ---
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/robmorgan/metamorph/internal/config"
@@ -26,6 +27,9 @@ type ProjectInstance struct {
 	oauthToken string
 	docker     docker.DockerClient
 	startedAt  time.Time
+
+	// Atomic snapshot for lock-free reads by handleProjectState.
+	lastSnapshot atomic.Pointer[State]
 
 	// Notification state.
 	prevCommitCount   int
@@ -102,17 +106,28 @@ func (p *ProjectInstance) StopAgents(ctx context.Context) {
 	_ = p.docker.StopAllAgents(ctx)
 }
 
-// WriteState writes project state to disk.
-func (p *ProjectInstance) WriteState() error {
-	state := &State{
+// storeSnapshot deep-copies the current agent state and stores it atomically
+// for lock-free reads by handleProjectState.
+func (p *ProjectInstance) storeSnapshot() {
+	agents := make([]AgentState, len(p.Agents))
+	for i, a := range p.Agents {
+		agents[i] = a
+		if a.CurrentTask != nil {
+			cp := *a.CurrentTask
+			agents[i].CurrentTask = &cp
+		}
+	}
+	p.lastSnapshot.Store(&State{
 		Status:      "running",
 		StartedAt:   p.startedAt,
 		ProjectName: p.Name,
-		Agents:      p.Agents,
-	}
+		Agents:      agents,
+	})
+}
 
-	statePath := filepath.Join(p.stateDir, constants.ProjectStateFile)
-	return writeStateToPath(statePath, state)
+// snapshot returns the last stored state snapshot, or nil if none exists.
+func (p *ProjectInstance) snapshot() *State {
+	return p.lastSnapshot.Load()
 }
 
 // AgentLogDir returns the path to agent logs for this project.
