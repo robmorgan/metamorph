@@ -41,13 +41,13 @@ type Model struct {
 	viewports   [panelCount]viewport.Model
 
 	// Data.
-	projects    []controlplane.ProjectDetail
-	states      map[string]*daemon.State
-	tasks       []controlplane.Task
-	agentLogs   map[string][]string // "project/agent-N" -> lines
-	diffs       []string
-	daemonLog   []string
-	logCh       <-chan string
+	projects  []controlplane.ProjectDetail
+	states    map[string]*daemon.State
+	tasks     []controlplane.Task
+	agentLogs map[string][]logLine // "project/agent-N" -> lines
+	diffs     []string
+	daemonLog []string
+	logCh     <-chan string
 
 	// Filtering.
 	projectFilter string // "" means all projects
@@ -57,8 +57,8 @@ type Model struct {
 	taskCursor int
 
 	// Mode.
-	mode        int
-	taskInput   taskInput
+	mode           int
+	taskInput      taskInput
 	confirmTask    string // task ID being confirmed
 	confirmAction  string // "complete", "delete", "start", or "stop"
 	confirmProject string // project name being confirmed (for start/stop)
@@ -71,9 +71,9 @@ type Model struct {
 	restarting bool
 
 	// Tick state.
-	tickCount  int
-	lastErr    string
-	ready      bool
+	tickCount int
+	lastErr   string
+	ready     bool
 }
 
 // NewModel creates a new TUI model.
@@ -82,7 +82,7 @@ func NewModel(baseURL, projectFilter string) Model {
 		baseURL:       baseURL,
 		projectFilter: projectFilter,
 		states:        make(map[string]*daemon.State),
-		agentLogs:     make(map[string][]string),
+		agentLogs:     make(map[string][]logLine),
 		taskInput:     newTaskInput(),
 		mode:          modeNormal,
 		logCh:         connectDaemonLog(),
@@ -521,7 +521,7 @@ func (m *Model) initViewports() {
 	// Account for borders (2 chars each side).
 	vpLeftWidth := max(leftWidth-4, 10)
 	vpRightWidth := max(rightWidth-4, 10)
-	vpTopHeight := max(topHeight-3, 3)    // -3 for border + title
+	vpTopHeight := max(topHeight-3, 3) // -3 for border + title
 	vpBottomHeight := max(bottomHeight-3, 3)
 
 	m.viewports[panelAgents] = viewport.New(vpLeftWidth, vpTopHeight)
@@ -553,7 +553,7 @@ func (m *Model) updateAgentsView() {
 		for _, agent := range state.Agents {
 			var line strings.Builder
 			if showProjectTag {
-				line.WriteString(projectTagStyle.Render("["+projName+"] "))
+				line.WriteString(projectTagStyle.Render("[" + projName + "] "))
 			}
 			line.WriteString(fmt.Sprintf("Agent %d ", agent.ID))
 			line.WriteString(dimStyle.Render(agent.Role))
@@ -567,12 +567,13 @@ func (m *Model) updateAgentsView() {
 			// Show log tail.
 			key := fmt.Sprintf("%s/agent-%d", projName, agent.ID)
 			if logLines, ok := m.agentLogs[key]; ok {
-				for _, l := range logLines {
+				for _, ll := range logLines {
+					text := ll.Text
 					// Truncate long lines.
-					if len(l) > m.viewports[panelAgents].Width-4 {
-						l = l[:m.viewports[panelAgents].Width-7] + "..."
+					if len(text) > m.viewports[panelAgents].Width-4 {
+						text = text[:m.viewports[panelAgents].Width-7] + "..."
 					}
-					lines = append(lines, "  "+logLineStyle.Render(l))
+					lines = append(lines, "  "+logLineStyleForType(ll.LineType).Render(text))
 				}
 			}
 			lines = append(lines, "")

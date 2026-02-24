@@ -1,6 +1,9 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/robmorgan/metamorph/internal/logparse"
+)
 
 // Colors.
 var (
@@ -16,8 +19,8 @@ var (
 
 // Panel borders.
 var (
-	activeBorder  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cyan)
-	normalBorder  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(gray)
+	activeBorder = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cyan)
+	normalBorder = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(gray)
 )
 
 // Header bar.
@@ -103,8 +106,27 @@ var cursorStyle = lipgloss.NewStyle().Foreground(cyan).Bold(true)
 // Dimmed text for inactive/secondary info.
 var dimStyle = lipgloss.NewStyle().Foreground(dimGray)
 
-// Log line indentation.
-var logLineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
+// Log line styles per type.
+var (
+	logLineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
+	logToolStyle   = lipgloss.NewStyle().Foreground(cyan)
+	logErrorStyle  = lipgloss.NewStyle().Foreground(red)
+	logSystemStyle = lipgloss.NewStyle().Foreground(dimGray)
+)
+
+// logLineStyleForType returns the appropriate style for a log line type.
+func logLineStyleForType(lt logparse.LogLineType) lipgloss.Style {
+	switch lt {
+	case logparse.LogLineTool:
+		return logToolStyle
+	case logparse.LogLineError:
+		return logErrorStyle
+	case logparse.LogLineSystem:
+		return logSystemStyle
+	default:
+		return logLineStyle
+	}
+}
 
 // Overlay (project filter / confirm dialog).
 var overlayStyle = lipgloss.NewStyle().

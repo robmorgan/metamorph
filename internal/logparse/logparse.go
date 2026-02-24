@@ -37,22 +37,31 @@ type ErrorInfo struct {
 	Message string `json:"message"`
 }
 
-// FormatLogLine parses a stream-json line and returns a human-readable string.
-// Non-JSON lines (e.g. entrypoint echo output) are returned as-is.
-// Returns the formatted string and whether it should be printed (empty means skip).
-func FormatLogLine(line string) (string, bool) {
+// LogLineType classifies a parsed log line for styling purposes.
+type LogLineType int
+
+const (
+	LogLineText   LogLineType = iota // Claude's text responses
+	LogLineTool                      // Tool calls (Edit, Bash, etc.)
+	LogLineError                     // Error messages
+	LogLineSystem                    // Entrypoint output, timestamps, git info
+)
+
+// FormatLogLineTyped parses a stream-json line and returns a human-readable
+// string, its type classification, and whether it should be displayed.
+func FormatLogLineTyped(line string) (string, LogLineType, bool) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
-		return "", false
+		return "", LogLineText, false
 	}
 
 	if trimmed[0] != '{' {
-		return line, true
+		return line, LogLineSystem, true
 	}
 
 	var ev StreamEvent
 	if err := json.Unmarshal([]byte(trimmed), &ev); err != nil {
-		return line, true
+		return line, LogLineSystem, true
 	}
 
 	inner := ev.Event
@@ -60,34 +69,42 @@ func FormatLogLine(line string) (string, bool) {
 	switch inner.Type {
 	case "content_block_start":
 		if inner.ContentBlock != nil && inner.ContentBlock.Type == "tool_use" {
-			return "[tool] " + inner.ContentBlock.Name, true
+			return "[tool] " + inner.ContentBlock.Name, LogLineTool, true
 		}
-		return "", false
+		return "", LogLineText, false
 
 	case "content_block_delta":
 		if inner.Delta == nil {
-			return "", false
+			return "", LogLineText, false
 		}
 		switch inner.Delta.Type {
 		case "text_delta":
-			return inner.Delta.Text, true
+			return inner.Delta.Text, LogLineText, true
 		case "thinking_delta", "input_json_delta":
-			return "", false
+			return "", LogLineText, false
 		}
-		return "", false
+		return "", LogLineText, false
 
 	case "content_block_stop", "message_start", "message_delta", "message_stop", "ping":
-		return "", false
+		return "", LogLineText, false
 
 	case "error":
 		if inner.Error != nil {
-			return "[error] " + inner.Error.Type + " - " + inner.Error.Message, true
+			return "[error] " + inner.Error.Type + " - " + inner.Error.Message, LogLineError, true
 		}
-		return "[error] unknown", true
+		return "[error] unknown", LogLineError, true
 
 	default:
-		return "", false
+		return "", LogLineText, false
 	}
+}
+
+// FormatLogLine parses a stream-json line and returns a human-readable string.
+// Non-JSON lines (e.g. entrypoint echo output) are returned as-is.
+// Returns the formatted string and whether it should be printed (empty means skip).
+func FormatLogLine(line string) (string, bool) {
+	s, _, ok := FormatLogLineTyped(line)
+	return s, ok
 }
 
 // FindLatestLog finds the most recent session-*.log file in the given directory.

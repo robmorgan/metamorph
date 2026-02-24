@@ -44,8 +44,14 @@ type tasksMsg struct {
 	err   error
 }
 
+// logLine holds a formatted log line along with its type classification.
+type logLine struct {
+	Text     string
+	LineType logparse.LogLineType
+}
+
 type logsMsg struct {
-	logs map[string][]string // agentKey -> recent log lines
+	logs map[string][]logLine // agentKey -> recent log lines
 }
 
 type diffsMsg struct {
@@ -170,7 +176,7 @@ func fetchTasks(baseURL, project string) tea.Cmd {
 // fetchLogs reads the latest log lines for agents from the filesystem.
 func fetchLogs(projectName string, agentIDs []int) tea.Cmd {
 	return func() tea.Msg {
-		logs := make(map[string][]string)
+		logs := make(map[string][]logLine)
 		for _, id := range agentIDs {
 			key := fmt.Sprintf("%s/agent-%d", projectName, id)
 			logDir := filepath.Join(constants.ProjectAgentLogDir(projectName), fmt.Sprintf("agent-%d", id))
@@ -186,10 +192,10 @@ func fetchLogs(projectName string, agentIDs []int) tea.Cmd {
 			}
 
 			lines := strings.Split(string(data), "\n")
-			var formatted []string
+			var formatted []logLine
 			for _, line := range lines {
-				if f, ok := logparse.FormatLogLine(line); ok {
-					formatted = append(formatted, f)
+				if f, lt, ok := logparse.FormatLogLineTyped(line); ok {
+					formatted = append(formatted, logLine{Text: f, LineType: lt})
 				}
 			}
 
@@ -206,7 +212,7 @@ func fetchLogs(projectName string, agentIDs []int) tea.Cmd {
 // fetchAllLogs reads logs for agents across multiple projects.
 func fetchAllLogs(states map[string]*daemon.State) tea.Cmd {
 	return func() tea.Msg {
-		logs := make(map[string][]string)
+		logs := make(map[string][]logLine)
 		for projectName, state := range states {
 			if state == nil {
 				continue
@@ -225,10 +231,10 @@ func fetchAllLogs(states map[string]*daemon.State) tea.Cmd {
 				}
 
 				lines := strings.Split(string(data), "\n")
-				var formatted []string
+				var formatted []logLine
 				for _, line := range lines {
-					if f, ok := logparse.FormatLogLine(line); ok {
-						formatted = append(formatted, f)
+					if f, lt, ok := logparse.FormatLogLineTyped(line); ok {
+						formatted = append(formatted, logLine{Text: f, LineType: lt})
 					}
 				}
 
@@ -436,7 +442,8 @@ func drainLogChannel(ch <-chan string) tea.Cmd {
 	}
 }
 
-// readTail reads the last n bytes of a file.
+// readTail reads the last n bytes of a file. When the file is larger than n,
+// the first partial line is dropped to avoid returning truncated JSON.
 func readTail(path string, n int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -460,5 +467,17 @@ func readTail(path string, n int64) ([]byte, error) {
 
 	buf := make([]byte, info.Size()-start)
 	_, err = f.Read(buf)
-	return buf, err
+	if err != nil {
+		return nil, err
+	}
+
+	// If we seeked past the beginning, the first "line" is likely a
+	// truncated fragment. Drop everything before the first newline.
+	if start > 0 {
+		if idx := bytes.IndexByte(buf, '\n'); idx >= 0 {
+			buf = buf[idx+1:]
+		}
+	}
+
+	return buf, nil
 }
