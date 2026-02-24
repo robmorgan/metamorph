@@ -1,102 +1,20 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/robmorgan/metamorph/internal/constants"
+	"github.com/robmorgan/metamorph/internal/logparse"
 	"github.com/spf13/cobra"
 )
-
-// Stream-JSON event types emitted by Claude Code with --output-format stream-json.
-type streamEvent struct {
-	Type  string     `json:"type"`
-	Event eventInner `json:"event"`
-}
-
-type eventInner struct {
-	Type         string        `json:"type"`
-	ContentBlock *contentBlock `json:"content_block,omitempty"`
-	Delta        *delta        `json:"delta,omitempty"`
-	Error        *errorInfo    `json:"error,omitempty"`
-}
-
-type contentBlock struct {
-	Type string `json:"type"`
-	Name string `json:"name,omitempty"`
-}
-
-type delta struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
-type errorInfo struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
-}
-
-// formatLogLine parses a stream-json line and returns a human-readable string.
-// Non-JSON lines (e.g. entrypoint echo output) are returned as-is.
-// Returns the formatted string and whether it should be printed (empty means skip).
-func formatLogLine(line string) (string, bool) {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" {
-		return "", false
-	}
-
-	if trimmed[0] != '{' {
-		return line, true
-	}
-
-	var ev streamEvent
-	if err := json.Unmarshal([]byte(trimmed), &ev); err != nil {
-		return line, true
-	}
-
-	inner := ev.Event
-
-	switch inner.Type {
-	case "content_block_start":
-		if inner.ContentBlock != nil && inner.ContentBlock.Type == "tool_use" {
-			return "[tool] " + inner.ContentBlock.Name, true
-		}
-		return "", false
-
-	case "content_block_delta":
-		if inner.Delta == nil {
-			return "", false
-		}
-		switch inner.Delta.Type {
-		case "text_delta":
-			return inner.Delta.Text, true
-		case "thinking_delta", "input_json_delta":
-			return "", false
-		}
-		return "", false
-
-	case "content_block_stop", "message_start", "message_delta", "message_stop", "ping":
-		return "", false
-
-	case "error":
-		if inner.Error != nil {
-			return "[error] " + inner.Error.Type + " - " + inner.Error.Message, true
-		}
-		return "[error] unknown", true
-
-	default:
-		return "", false
-	}
-}
 
 var logsCmd = &cobra.Command{
 	Use:   "logs <agent-id>",
@@ -119,7 +37,7 @@ var logsCmd = &cobra.Command{
 		logDir := filepath.Join(constants.ProjectAgentLogDir(projectName), fmt.Sprintf("agent-%d", agentID))
 
 		// Find the latest session log file.
-		logFile, err := findLatestLog(logDir)
+		logFile, err := logparse.FindLatestLog(logDir)
 		if err != nil {
 			return err
 		}
@@ -137,7 +55,7 @@ var logsCmd = &cobra.Command{
 			start = len(lines) - tail
 		}
 		for _, line := range lines[start:] {
-			if formatted, ok := formatLogLine(line); ok {
+			if formatted, ok := logparse.FormatLogLine(line); ok {
 				fmt.Println(formatted)
 			}
 		}
@@ -190,7 +108,7 @@ var logsCmd = &cobra.Command{
 					offset += int64(len(newData))
 					newLines := strings.Split(string(newData), "\n")
 					for _, line := range newLines {
-						if formatted, ok := formatLogLine(line); ok {
+						if formatted, ok := logparse.FormatLogLine(line); ok {
 							fmt.Println(formatted)
 						}
 					}
@@ -204,43 +122,4 @@ func init() {
 	logsCmd.Flags().BoolP("follow", "f", false, "Follow log output")
 	logsCmd.Flags().Int("tail", 50, "Number of lines to show from the end")
 	rootCmd.AddCommand(logsCmd)
-}
-
-// findLatestLog finds the most recent session-*.log file in the given directory.
-func findLatestLog(dir string) (string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("no logs found for this agent (directory does not exist)")
-		}
-		return "", fmt.Errorf("failed to read log directory: %w", err)
-	}
-
-	var logFiles []string
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "session-") && strings.HasSuffix(e.Name(), ".log") {
-			logFiles = append(logFiles, e.Name())
-		}
-	}
-
-	if len(logFiles) == 0 {
-		return "", fmt.Errorf("no session log files found in %s", dir)
-	}
-
-	// Sort by session number (session-1.log, session-2.log, ...).
-	sort.Slice(logFiles, func(i, j int) bool {
-		ni := extractSessionNumber(logFiles[i])
-		nj := extractSessionNumber(logFiles[j])
-		return ni < nj
-	})
-
-	return filepath.Join(dir, logFiles[len(logFiles)-1]), nil
-}
-
-// extractSessionNumber parses the number from "session-N.log".
-func extractSessionNumber(name string) int {
-	name = strings.TrimPrefix(name, "session-")
-	name = strings.TrimSuffix(name, ".log")
-	n, _ := strconv.Atoi(name)
-	return n
 }

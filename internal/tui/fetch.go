@@ -1,0 +1,342 @@
+package tui
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/robmorgan/metamorph/internal/config"
+	"github.com/robmorgan/metamorph/internal/constants"
+	"github.com/robmorgan/metamorph/internal/controlplane"
+	"github.com/robmorgan/metamorph/internal/daemon"
+	"github.com/robmorgan/metamorph/internal/logparse"
+)
+
+// Message types for async data fetching.
+
+type projectsMsg struct {
+	projects []controlplane.ProjectDetail
+	err      error
+}
+
+type stateMsg struct {
+	project string
+	state   *daemon.State
+	err     error
+}
+
+type allStatesMsg struct {
+	states map[string]*daemon.State
+}
+
+type tasksMsg struct {
+	tasks []controlplane.Task
+	err   error
+}
+
+type logsMsg struct {
+	logs map[string][]string // agentKey -> recent log lines
+}
+
+type diffsMsg struct {
+	diffs []string
+}
+
+type taskCreatedMsg struct {
+	err error
+}
+
+type taskCompletedMsg struct {
+	taskID string
+	err    error
+}
+
+type taskDeletedMsg struct {
+	taskID string
+	err    error
+}
+
+type tickMsg time.Time
+
+// fetchProjects fetches the project list from the API.
+func fetchProjects(baseURL string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := http.Get(baseURL + "/api/projects")
+		if err != nil {
+			return projectsMsg{err: err}
+		}
+		defer resp.Body.Close()
+
+		var projects []controlplane.ProjectDetail
+		if err := json.NewDecoder(resp.Body).Decode(&projects); err != nil {
+			return projectsMsg{err: err}
+		}
+		return projectsMsg{projects: projects}
+	}
+}
+
+// fetchState fetches agent state for a single project.
+func fetchState(baseURL, projectName string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := http.Get(baseURL + "/api/projects/" + projectName + "/state")
+		if err != nil {
+			return stateMsg{project: projectName, err: err}
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return stateMsg{project: projectName, err: fmt.Errorf("status %d", resp.StatusCode)}
+		}
+
+		var state daemon.State
+		if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+			return stateMsg{project: projectName, err: err}
+		}
+		return stateMsg{project: projectName, state: &state}
+	}
+}
+
+// fetchAllStates fetches state for all projects and aggregates results.
+func fetchAllStates(baseURL string, projectNames []string) tea.Cmd {
+	return func() tea.Msg {
+		states := make(map[string]*daemon.State)
+		client := &http.Client{Timeout: 5 * time.Second}
+		for _, name := range projectNames {
+			resp, err := client.Get(baseURL + "/api/projects/" + name + "/state")
+			if err != nil {
+				continue
+			}
+			var state daemon.State
+			if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+				resp.Body.Close()
+				continue
+			}
+			resp.Body.Close()
+			states[name] = &state
+		}
+		return allStatesMsg{states: states}
+	}
+}
+
+// fetchTasks fetches tasks, optionally filtered by project.
+func fetchTasks(baseURL, project string) tea.Cmd {
+	return func() tea.Msg {
+		url := baseURL + "/api/tasks"
+		if project != "" {
+			url += "?project=" + project
+		}
+		resp, err := http.Get(url)
+		if err != nil {
+			return tasksMsg{err: err}
+		}
+		defer resp.Body.Close()
+
+		var tasks []controlplane.Task
+		if err := json.NewDecoder(resp.Body).Decode(&tasks); err != nil {
+			return tasksMsg{err: err}
+		}
+		return tasksMsg{tasks: tasks}
+	}
+}
+
+// fetchLogs reads the latest log lines for agents from the filesystem.
+func fetchLogs(projectName string, agentIDs []int) tea.Cmd {
+	return func() tea.Msg {
+		logs := make(map[string][]string)
+		for _, id := range agentIDs {
+			key := fmt.Sprintf("%s/agent-%d", projectName, id)
+			logDir := filepath.Join(constants.ProjectAgentLogDir(projectName), fmt.Sprintf("agent-%d", id))
+			logFile, err := logparse.FindLatestLog(logDir)
+			if err != nil {
+				continue
+			}
+
+			// Read last 8KB of the file.
+			data, err := readTail(logFile, 8192)
+			if err != nil {
+				continue
+			}
+
+			lines := strings.Split(string(data), "\n")
+			var formatted []string
+			for _, line := range lines {
+				if f, ok := logparse.FormatLogLine(line); ok {
+					formatted = append(formatted, f)
+				}
+			}
+
+			// Keep last 8 lines.
+			if len(formatted) > 8 {
+				formatted = formatted[len(formatted)-8:]
+			}
+			logs[key] = formatted
+		}
+		return logsMsg{logs: logs}
+	}
+}
+
+// fetchAllLogs reads logs for agents across multiple projects.
+func fetchAllLogs(states map[string]*daemon.State) tea.Cmd {
+	return func() tea.Msg {
+		logs := make(map[string][]string)
+		for projectName, state := range states {
+			if state == nil {
+				continue
+			}
+			for _, agent := range state.Agents {
+				key := fmt.Sprintf("%s/agent-%d", projectName, agent.ID)
+				logDir := filepath.Join(constants.ProjectAgentLogDir(projectName), fmt.Sprintf("agent-%d", agent.ID))
+				logFile, err := logparse.FindLatestLog(logDir)
+				if err != nil {
+					continue
+				}
+
+				data, err := readTail(logFile, 8192)
+				if err != nil {
+					continue
+				}
+
+				lines := strings.Split(string(data), "\n")
+				var formatted []string
+				for _, line := range lines {
+					if f, ok := logparse.FormatLogLine(line); ok {
+						formatted = append(formatted, f)
+					}
+				}
+
+				if len(formatted) > 8 {
+					formatted = formatted[len(formatted)-8:]
+				}
+				logs[key] = formatted
+			}
+		}
+		return logsMsg{logs: logs}
+	}
+}
+
+// fetchDiffs runs git log --stat on upstream bare repos.
+func fetchDiffs(projectNames []string) tea.Cmd {
+	return func() tea.Msg {
+		var allDiffs []string
+		for _, projectName := range projectNames {
+			cfg, err := config.LoadProject(projectName)
+			if err != nil {
+				continue
+			}
+			for _, repo := range cfg.Repos {
+				label := config.RepoLabel(repo)
+				repoPath := constants.UpstreamRepoPath(projectName, label)
+				if _, err := os.Stat(repoPath); err != nil {
+					continue
+				}
+
+				cmd := exec.Command("git", "log", "--stat", "--oneline", "-15")
+				cmd.Dir = repoPath
+				var out bytes.Buffer
+				cmd.Stdout = &out
+				if err := cmd.Run(); err != nil {
+					continue
+				}
+
+				if len(projectNames) > 1 {
+					allDiffs = append(allDiffs, fmt.Sprintf("--- %s/%s ---", projectName, label))
+				}
+				lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+				allDiffs = append(allDiffs, lines...)
+			}
+		}
+		return diffsMsg{diffs: allDiffs}
+	}
+}
+
+// createTask posts a new task via the API.
+func createTask(baseURL, title, project string, priority int) tea.Cmd {
+	return func() tea.Msg {
+		body := map[string]interface{}{
+			"title":    title,
+			"project":  project,
+			"priority": priority,
+		}
+		data, _ := json.Marshal(body)
+		resp, err := http.Post(baseURL+"/api/tasks", "application/json", bytes.NewReader(data))
+		if err != nil {
+			return taskCreatedMsg{err: err}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			return taskCreatedMsg{err: fmt.Errorf("status %d", resp.StatusCode)}
+		}
+		return taskCreatedMsg{}
+	}
+}
+
+// completeTask marks a task as complete via the API.
+func completeTask(baseURL, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		body := []byte(`{"summary":"completed via TUI"}`)
+		resp, err := http.Post(baseURL+"/api/tasks/"+taskID+"/complete", "application/json", bytes.NewReader(body))
+		if err != nil {
+			return taskCompletedMsg{taskID: taskID, err: err}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return taskCompletedMsg{taskID: taskID, err: fmt.Errorf("status %d", resp.StatusCode)}
+		}
+		return taskCompletedMsg{taskID: taskID}
+	}
+}
+
+// deleteTask marks a task as done via PATCH.
+func deleteTask(baseURL, taskID string) tea.Cmd {
+	return func() tea.Msg {
+		body := []byte(`{"status":"done"}`)
+		req, err := http.NewRequest(http.MethodPatch, baseURL+"/api/tasks/"+taskID, bytes.NewReader(body))
+		if err != nil {
+			return taskDeletedMsg{taskID: taskID, err: err}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return taskDeletedMsg{taskID: taskID, err: err}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return taskDeletedMsg{taskID: taskID, err: fmt.Errorf("status %d", resp.StatusCode)}
+		}
+		return taskDeletedMsg{taskID: taskID}
+	}
+}
+
+// readTail reads the last n bytes of a file.
+func readTail(path string, n int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	start := info.Size() - n
+	if start < 0 {
+		start = 0
+	}
+
+	if _, err := f.Seek(start, 0); err != nil {
+		return nil, err
+	}
+
+	buf := make([]byte, info.Size()-start)
+	_, err = f.Read(buf)
+	return buf, err
+}

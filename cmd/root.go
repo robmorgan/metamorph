@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/robmorgan/metamorph/internal/controlplane"
 	"github.com/robmorgan/metamorph/internal/config"
 	"github.com/robmorgan/metamorph/internal/constants"
+	"github.com/robmorgan/metamorph/internal/controlplane"
+	"github.com/robmorgan/metamorph/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -30,6 +31,29 @@ var rootCmd = &cobra.Command{
 		handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
 		slog.SetDefault(slog.New(handler))
 		return nil
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Bare "metamorph" starts the daemon if needed and launches the TUI.
+		if !daemon.IsRunning() {
+			oauthToken := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
+			apiKey := os.Getenv("ANTHROPIC_API_KEY")
+			if oauthToken == "" && apiKey == "" {
+				return fmt.Errorf("no credentials found: set CLAUDE_CODE_OAUTH_TOKEN (Claude Pro/Max) or ANTHROPIC_API_KEY")
+			}
+
+			fmt.Println("Starting metamorph daemon...")
+			if err := daemon.Start(apiKey, oauthToken); err != nil {
+				return err
+			}
+			fmt.Println("Daemon started.")
+		}
+
+		projectFilter := ""
+		if name, _ := cmd.Flags().GetString("project"); name != "" {
+			projectFilter = name
+		}
+
+		return runTUI(projectFilter)
 	},
 }
 
