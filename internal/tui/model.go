@@ -533,7 +533,19 @@ func (m *Model) updateAgentsView() {
 	}
 
 	if len(lines) == 0 {
-		if m.projectFilter != "" {
+		// Check if any visible project is in startup phase.
+		var startupPhase string
+		for _, projName := range projectNames {
+			if s, ok := m.states[projName]; ok && s != nil && s.Status == "starting" && s.StartupPhase != "" {
+				startupPhase = s.StartupPhase
+				break
+			}
+		}
+
+		if startupPhase != "" {
+			frame := spinnerFrames[m.tickCount%len(spinnerFrames)]
+			lines = append(lines, fmt.Sprintf("  %c %s", frame, startupPhase))
+		} else if m.projectFilter != "" {
 			// Check if the filtered project is stopped.
 			stopped := true
 			for _, p := range m.projects {
@@ -718,6 +730,9 @@ func (m Model) View() string {
 	return view
 }
 
+// spinnerFrames are the Braille spinner characters cycled during startup.
+var spinnerFrames = []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
+
 func (m Model) renderPanel(panel int, title string, width, height int) string {
 	border := normalBorder
 	if panel == m.activePanel {
@@ -740,6 +755,17 @@ func (m Model) renderPanel(panel int, title string, width, height int) string {
 	}
 
 	titleStr := panelTitleStyle.Render(fmt.Sprintf("%s (%d)", title, count))
+
+	// Show spinner in agents panel title during startup.
+	if panel == panelAgents {
+		for _, s := range m.states {
+			if s != nil && s.StartupPhase != "" {
+				frame := spinnerFrames[m.tickCount%len(spinnerFrames)]
+				titleStr = panelTitleStyle.Render(fmt.Sprintf("%s %c", title, frame))
+				break
+			}
+		}
+	}
 
 	innerWidth := max(width-4, 10)
 	innerHeight := max(height-3, 3) // border(2) + title(1)

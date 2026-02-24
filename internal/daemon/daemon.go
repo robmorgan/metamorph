@@ -39,11 +39,12 @@ const (
 
 // State represents the daemon's persisted state.
 type State struct {
-	Status      string       `json:"status"`
-	StartedAt   time.Time    `json:"started_at"`
-	ProjectName string       `json:"project_name"`
-	Agents      []AgentState `json:"agents"`
-	Stats       Stats        `json:"stats"`
+	Status       string       `json:"status"`
+	StartupPhase string       `json:"startup_phase,omitempty"`
+	StartedAt    time.Time    `json:"started_at"`
+	ProjectName  string       `json:"project_name"`
+	Agents       []AgentState `json:"agents"`
+	Stats        Stats        `json:"stats"`
 }
 
 // AgentState tracks a single agent container.
@@ -370,6 +371,18 @@ func (d *Daemon) getDockerClient() (docker.DockerClient, error) {
 	return d.docker, nil
 }
 
+// writeStartupProgress writes intermediate state during project startup.
+func writeStartupProgress(projectName, phase string) {
+	state := &State{
+		Status:       "starting",
+		StartupPhase: phase,
+		ProjectName:  projectName,
+		StartedAt:    time.Now().UTC(),
+	}
+	statePath := filepath.Join(constants.ProjectDir(projectName), constants.ProjectStateFile)
+	_ = writeStateToPath(statePath, state)
+}
+
 // StartProject starts agents for a named project.
 func (d *Daemon) StartProject(ctx context.Context, projectName string) error {
 	d.mu.Lock()
@@ -392,6 +405,7 @@ func (d *Daemon) StartProject(ctx context.Context, projectName string) error {
 	instance := NewProjectInstance(projectName, cfg, d.apiKey, d.oauthToken, dockerClient)
 
 	// Initialize upstream bare repos if they don't exist yet.
+	writeStartupProgress(projectName, "Initializing repos...")
 	for _, repo := range cfg.Repos {
 		label := config.RepoLabel(repo)
 		upstreamPath := constants.UpstreamRepoPath(projectName, label)
@@ -404,12 +418,14 @@ func (d *Daemon) StartProject(ctx context.Context, projectName string) error {
 	}
 
 	// Build image.
+	writeStartupProgress(projectName, "Building Docker image...")
 	slog.Info("building docker image", "project", projectName)
 	if err := dockerClient.BuildImage(instance.primaryRepoPath(), cfg.Docker.ExtraPackages); err != nil {
 		return fmt.Errorf("failed to build image: %w", err)
 	}
 
 	// Start agents.
+	writeStartupProgress(projectName, "Starting agents...")
 	slog.Info("starting agents", "project", projectName, "count", cfg.Agents.Count)
 	if err := instance.StartAgents(ctx); err != nil {
 		return fmt.Errorf("failed to start agents: %w", err)
