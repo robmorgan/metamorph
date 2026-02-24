@@ -204,9 +204,6 @@ Add project-specific instructions for your agents here.
 
 ## Architecture
 <!-- Describe key files and project structure -->
-
-## Task List
-<!-- List tasks for agents to work on -->
 `
 		if err := os.WriteFile(agentPromptPath, []byte(skeleton), 0644); err != nil {
 			return fmt.Errorf("failed to write AGENT_PROMPT.md: %w", err)
@@ -240,7 +237,7 @@ Add project-specific instructions for your agents here.
 	fmt.Printf("\nProject %q initialized successfully!\n\n", projectName)
 	fmt.Println("Next steps:")
 	fmt.Printf("  1. Review and customize %s\n", configPath)
-	fmt.Println("  2. Edit AGENT_PROMPT.md with project-specific instructions")
+	fmt.Println("  2. (Optional) Edit AGENT_PROMPT.md with project context (build commands, architecture)")
 	fmt.Println("  3. Commit the changes:")
 	fmt.Println("       git add -A && git commit -m \"Initialize metamorph\"")
 	fmt.Println("  4. Set credentials (pick one):")
