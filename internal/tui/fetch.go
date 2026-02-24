@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -71,6 +74,10 @@ type projectStartedMsg struct {
 type projectStoppedMsg struct {
 	project string
 	err     error
+}
+
+type daemonLogMsg struct {
+	lines []string
 }
 
 type tickMsg time.Time
@@ -351,6 +358,54 @@ func stopProject(baseURL, projectName string) tea.Cmd {
 			return projectStoppedMsg{project: projectName, err: fmt.Errorf("status %d", resp.StatusCode)}
 		}
 		return projectStoppedMsg{project: projectName}
+	}
+}
+
+// connectDaemonLog connects to the daemon's SSE log endpoint over the Unix
+// domain socket and returns a channel that receives log lines.
+func connectDaemonLog() <-chan string {
+	ch := make(chan string, 256)
+	go func() {
+		client := &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+					return net.Dial("unix", constants.DaemonSocketPath())
+				},
+			},
+		}
+		for {
+			resp, err := client.Get("http://daemon/api/daemon/logs")
+			if err != nil {
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			scanner := bufio.NewScanner(resp.Body)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if strings.HasPrefix(line, "data: ") {
+					ch <- line[6:] // strip "data: " prefix
+				}
+			}
+			resp.Body.Close()
+			time.Sleep(2 * time.Second)
+		}
+	}()
+	return ch
+}
+
+// drainLogChannel returns a tea.Cmd that non-blockingly drains available lines
+// from the daemon log channel.
+func drainLogChannel(ch <-chan string) tea.Cmd {
+	return func() tea.Msg {
+		var lines []string
+		for {
+			select {
+			case line := <-ch:
+				lines = append(lines, line)
+			default:
+				return daemonLogMsg{lines: lines}
+			}
+		}
 	}
 }
 

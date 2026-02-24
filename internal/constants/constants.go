@@ -11,6 +11,7 @@ const (
 	GlobalConfigFile   = "config.json"
 	DaemonPIDFile      = "daemon.pid"
 	DaemonLogFile      = "daemon.log"
+	DaemonSocket       = "daemon.sock"
 	ControlPlaneDBFile = "broker.db" // kept as broker.db for backwards compat
 	DockerDir          = "docker"
 	ProjectsDir        = "projects"
@@ -43,6 +44,11 @@ var AgentRoles = map[string]string{
 	"documenter": "Writes documentation, comments, and READMEs",
 	"optimizer":  "Profiles and optimizes performance bottlenecks",
 	"reviewer":   "Reviews code changes and suggests improvements",
+}
+
+// DaemonSocketPath returns the path to the daemon's Unix domain socket.
+func DaemonSocketPath() string {
+	return filepath.Join(GlobalDir(), DaemonSocket)
 }
 
 // GlobalDir returns the path to the global metamorph directory (~/.metamorph/).

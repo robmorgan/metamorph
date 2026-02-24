@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -15,12 +16,15 @@ import (
 
 // ControlPlane is the HTTP server that manages projects, tasks, and agents.
 type ControlPlane struct {
-	store         Store
-	mu            sync.Mutex
-	server        *http.Server
-	extraHandlers []extraHandler
-	configReader  func(name string) string // returns project description
-	staticFS      fs.FS                    // embedded web UI (nil when built with -tags noui)
+	store                 Store
+	mu                    sync.Mutex
+	server                *http.Server
+	udsServer             *http.Server
+	udsSocketPath         string
+	extraHandlers         []extraHandler
+	configReader          func(name string) string      // returns project description
+	onProjectStatusChange func(name string, status string) // called after start/stop
+	staticFS              fs.FS                          // embedded web UI (nil when built with -tags noui)
 }
 
 type extraHandler struct {
@@ -58,12 +62,47 @@ func (cp *ControlPlane) Start(addr string) error {
 	return nil
 }
 
-// Shutdown gracefully stops the HTTP server.
-func (cp *ControlPlane) Shutdown(ctx context.Context) error {
-	if cp.server != nil {
-		return cp.server.Shutdown(ctx)
+// StartUDS begins serving the control plane API on a Unix domain socket.
+// It uses the same handler (mux) as the TCP server.
+func (cp *ControlPlane) StartUDS(socketPath string) error {
+	// Remove any stale socket file.
+	_ = os.Remove(socketPath)
+
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return fmt.Errorf("controlplane: listen unix %s: %w", socketPath, err)
 	}
+
+	cp.udsSocketPath = socketPath
+	cp.udsServer = &http.Server{
+		Handler: cp.buildMux(),
+	}
+
+	go func() {
+		slog.Info("control plane UDS listening", "path", socketPath)
+		if err := cp.udsServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+			slog.Error("control plane UDS serve error", "error", err)
+		}
+	}()
+
 	return nil
+}
+
+// Shutdown gracefully stops the HTTP and UDS servers.
+func (cp *ControlPlane) Shutdown(ctx context.Context) error {
+	var firstErr error
+	if cp.udsServer != nil {
+		if err := cp.udsServer.Shutdown(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		_ = os.Remove(cp.udsSocketPath)
+	}
+	if cp.server != nil {
+		if err := cp.server.Shutdown(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // Handler returns the HTTP handler for testing without starting a server.
@@ -80,6 +119,12 @@ func (cp *ControlPlane) RegisterHandler(pattern string, handler http.HandlerFunc
 // SetConfigReader sets a function that returns a project description by name.
 func (cp *ControlPlane) SetConfigReader(fn func(name string) string) {
 	cp.configReader = fn
+}
+
+// SetOnProjectStatusChange registers a callback invoked after a project's
+// status is updated via the start/stop API endpoints.
+func (cp *ControlPlane) SetOnProjectStatusChange(fn func(name string, status string)) {
+	cp.onProjectStatusChange = fn
 }
 
 // SetStaticFS sets the embedded filesystem for serving the web UI.
@@ -567,6 +612,9 @@ func (cp *ControlPlane) handleStartProject(w http.ResponseWriter, r *http.Reques
 		}
 		return
 	}
+	if cp.onProjectStatusChange != nil {
+		cp.onProjectStatusChange(name, "running")
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
 }
 
@@ -584,6 +632,9 @@ func (cp *ControlPlane) handleStopProject(w http.ResponseWriter, r *http.Request
 			writeErr(w, http.StatusInternalServerError, err)
 		}
 		return
+	}
+	if cp.onProjectStatusChange != nil {
+		cp.onProjectStatusChange(name, "stopped")
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }

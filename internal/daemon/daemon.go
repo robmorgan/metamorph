@@ -68,15 +68,17 @@ type Stats struct {
 
 // Daemon manages the system-wide background server process.
 type Daemon struct {
-	globalDir  string // ~/.metamorph/
-	cfg        *config.GlobalConfig
-	apiKey     string
-	oauthToken string
-	docker     docker.DockerClient // lazily initialized
-	cp         *controlplane.ControlPlane
-	projects   map[string]*ProjectInstance
-	mu         sync.Mutex
-	startedAt  time.Time
+	globalDir       string // ~/.metamorph/
+	cfg             *config.GlobalConfig
+	apiKey          string
+	oauthToken      string
+	docker          docker.DockerClient // lazily initialized
+	cp              *controlplane.ControlPlane
+	logStreamer     *LogStreamer
+	projectChangeCh chan struct{} // signaled when a project is started/stopped via API
+	projects        map[string]*ProjectInstance
+	mu              sync.Mutex
+	startedAt       time.Time
 }
 
 // Start launches the daemon as a background subprocess. It re-execs the
@@ -288,12 +290,13 @@ func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string) error {
 	globalDir := constants.GlobalDir()
 
 	d := &Daemon{
-		globalDir:  globalDir,
-		cfg:        globalCfg,
-		apiKey:     apiKey,
-		oauthToken: oauthToken,
-		startedAt:  time.Now().UTC(),
-		projects:   make(map[string]*ProjectInstance),
+		globalDir:       globalDir,
+		cfg:             globalCfg,
+		apiKey:          apiKey,
+		oauthToken:      oauthToken,
+		startedAt:       time.Now().UTC(),
+		projects:        make(map[string]*ProjectInstance),
+		projectChangeCh: make(chan struct{}, 1),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -318,6 +321,14 @@ func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string) error {
 		d.cp.SetStaticFS(web.StaticFS)
 	}
 
+	// Notify the daemon event loop immediately when a project is started/stopped.
+	d.cp.SetOnProjectStatusChange(func(name, status string) {
+		select {
+		case d.projectChangeCh <- struct{}{}:
+		default:
+		}
+	})
+
 	// Set config reader so project endpoints can return descriptions.
 	d.cp.SetConfigReader(func(name string) string {
 		cfg, err := config.LoadProject(name)
@@ -327,13 +338,28 @@ func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string) error {
 		return cfg.Project.Description
 	})
 
+	// Set up log streaming (must register handler before starting servers).
+	d.logStreamer = NewLogStreamer(500)
+	d.cp.RegisterHandler("GET /api/daemon/logs", d.logStreamer.ServeHTTP)
+
 	// Register daemon-specific endpoints on the control plane.
 	d.cp.RegisterHandler("GET /api/projects/{name}/state", d.handleProjectState)
 
+	// Start TCP listener.
 	cpAddr := fmt.Sprintf(":%d", globalCfg.Daemon.Port)
 	if err := d.cp.Start(cpAddr); err != nil {
 		return fmt.Errorf("daemon: failed to start control plane: %w", err)
 	}
+
+	// Start UDS listener on the same HTTP mux.
+	socketPath := constants.DaemonSocketPath()
+	if err := d.cp.StartUDS(socketPath); err != nil {
+		return fmt.Errorf("daemon: failed to start UDS: %w", err)
+	}
+
+	// Wrap slog with BufferedHandler to stream logs to connected clients.
+	currentHandler := slog.Default().Handler()
+	slog.SetDefault(slog.New(NewBufferedHandler(currentHandler, d.logStreamer)))
 
 	// Set up signal handling.
 	sigCh := make(chan os.Signal, 1)
@@ -353,6 +379,8 @@ func Run(globalCfg *config.GlobalConfig, apiKey, oauthToken string) error {
 			return d.shutdown(ctx)
 		case <-ticker.C:
 			d.monitor(ctx)
+		case <-d.projectChangeCh:
+			d.checkAndStartProjects(ctx)
 		}
 	}
 }

@@ -18,6 +18,7 @@ const (
 	panelAgents = iota
 	panelTasks
 	panelDiffs
+	panelLog
 	panelCount
 )
 
@@ -45,6 +46,8 @@ type Model struct {
 	tasks       []controlplane.Task
 	agentLogs   map[string][]string // "project/agent-N" -> lines
 	diffs       []string
+	daemonLog   []string
+	logCh       <-chan string
 
 	// Filtering.
 	projectFilter string // "" means all projects
@@ -79,6 +82,7 @@ func NewModel(baseURL, projectFilter string) Model {
 		agentLogs:     make(map[string][]string),
 		taskInput:     newTaskInput(),
 		mode:          modeNormal,
+		logCh:         connectDaemonLog(),
 	}
 }
 
@@ -162,6 +166,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case diffsMsg:
 		m.diffs = msg.diffs
 		m.updateDiffsView()
+		return m, nil
+
+	case daemonLogMsg:
+		if len(msg.lines) > 0 {
+			m.daemonLog = append(m.daemonLog, msg.lines...)
+			if len(m.daemonLog) > 500 {
+				m.daemonLog = m.daemonLog[len(m.daemonLog)-500:]
+			}
+			m.updateLogView()
+		}
 		return m, nil
 
 	case taskCreatedMsg:
@@ -259,6 +273,11 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "3":
 		m.activePanel = panelDiffs
+		m.updateAllViews()
+		return m, nil
+
+	case "4":
+		m.activePanel = panelLog
 		m.updateAllViews()
 		return m, nil
 
@@ -428,6 +447,9 @@ func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) buildTickCmds() []tea.Cmd {
 	var cmds []tea.Cmd
 
+	// Always drain daemon log channel.
+	cmds = append(cmds, drainLogChannel(m.logCh))
+
 	projectNames := m.activeProjectNames()
 
 	if len(projectNames) > 0 {
@@ -466,7 +488,7 @@ func (m *Model) initViewports() {
 		return
 	}
 
-	// Layout: header(1) + top panels + diffs + status bar(1).
+	// Layout: header(1) + top panels + bottom panels + status bar(1).
 	topHeight := (m.height - 4) * 55 / 100
 	bottomHeight := m.height - 4 - topHeight
 	leftWidth := m.width/2 - 1
@@ -475,13 +497,13 @@ func (m *Model) initViewports() {
 	// Account for borders (2 chars each side).
 	vpLeftWidth := max(leftWidth-4, 10)
 	vpRightWidth := max(rightWidth-4, 10)
-	vpBottomWidth := max(m.width-4, 10)
-	vpTopHeight := max(topHeight-3, 3) // -3 for border + title
+	vpTopHeight := max(topHeight-3, 3)    // -3 for border + title
 	vpBottomHeight := max(bottomHeight-3, 3)
 
 	m.viewports[panelAgents] = viewport.New(vpLeftWidth, vpTopHeight)
 	m.viewports[panelTasks] = viewport.New(vpRightWidth, vpTopHeight)
-	m.viewports[panelDiffs] = viewport.New(vpBottomWidth, vpBottomHeight)
+	m.viewports[panelDiffs] = viewport.New(vpLeftWidth, vpBottomHeight)
+	m.viewports[panelLog] = viewport.New(vpRightWidth, vpBottomHeight)
 
 	m.updateAllViews()
 }
@@ -490,6 +512,7 @@ func (m *Model) updateAllViews() {
 	m.updateAgentsView()
 	m.updateTasksView()
 	m.updateDiffsView()
+	m.updateLogView()
 }
 
 func (m *Model) updateAgentsView() {
@@ -620,6 +643,25 @@ func (m *Model) updateDiffsView() {
 	m.viewports[panelDiffs].SetContent(strings.Join(lines, "\n"))
 }
 
+func (m *Model) updateLogView() {
+	var lines []string
+	for _, line := range m.daemonLog {
+		// Truncate long lines.
+		if len(line) > m.viewports[panelLog].Width-4 {
+			line = line[:m.viewports[panelLog].Width-7] + "..."
+		}
+		lines = append(lines, "  "+logLineStyle.Render(line))
+	}
+
+	if len(lines) == 0 {
+		lines = append(lines, dimStyle.Render("  Waiting for daemon logs..."))
+	}
+
+	m.viewports[panelLog].SetContent(strings.Join(lines, "\n"))
+	// Auto-scroll to bottom.
+	m.viewports[panelLog].GotoBottom()
+}
+
 func styleDiffLine(line string) string {
 	trimmed := strings.TrimSpace(line)
 
@@ -703,8 +745,10 @@ func (m Model) View() string {
 	tasksPanel := m.renderPanel(panelTasks, "TASKS", rightWidth, topHeight)
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, agentsPanel, tasksPanel)
 
-	// Bottom panel (diffs).
-	diffsPanel := m.renderPanel(panelDiffs, "DIFFS", m.width, bottomHeight)
+	// Bottom panels (diffs + daemon log).
+	diffsPanel := m.renderPanel(panelDiffs, "DIFFS", leftWidth, bottomHeight)
+	logPanel := m.renderPanel(panelLog, "DAEMON LOG", rightWidth, bottomHeight)
+	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, diffsPanel, logPanel)
 
 	// Status bar.
 	statusBar := m.renderStatusBar()
@@ -713,7 +757,7 @@ func (m Model) View() string {
 	view := lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		topRow,
-		diffsPanel,
+		bottomRow,
 		statusBar,
 	)
 
@@ -752,6 +796,8 @@ func (m Model) renderPanel(panel int, title string, width, height int) string {
 		count = len(m.tasks)
 	case panelDiffs:
 		count = len(m.diffs)
+	case panelLog:
+		count = len(m.daemonLog)
 	}
 
 	titleStr := panelTitleStyle.Render(fmt.Sprintf("%s (%d)", title, count))
@@ -789,7 +835,7 @@ func (m Model) renderStatusBar() string {
 	var left string
 	switch m.mode {
 	case modeNormal:
-		left = "  Tab:panel  p:project  s:start/stop  a:add task  q:quit"
+		left = "  Tab:panel  1-4:panel  p:project  s:start/stop  a:add task  q:quit"
 	case modeAddTask:
 		left = "  Enter:submit  Esc:cancel"
 	case modeProjectFilter:
