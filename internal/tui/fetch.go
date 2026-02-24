@@ -80,6 +80,10 @@ type daemonLogMsg struct {
 	lines []string
 }
 
+type daemonRestartedMsg struct {
+	err error
+}
+
 type tickMsg time.Time
 
 // fetchProjects fetches the project list from the API.
@@ -358,6 +362,29 @@ func stopProject(baseURL, projectName string) tea.Cmd {
 			return projectStoppedMsg{project: projectName, err: fmt.Errorf("status %d", resp.StatusCode)}
 		}
 		return projectStoppedMsg{project: projectName}
+	}
+}
+
+// restartDaemon stops and restarts the daemon process.
+func restartDaemon() tea.Cmd {
+	return func() tea.Msg {
+		oauthToken := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		if oauthToken == "" && apiKey == "" {
+			return daemonRestartedMsg{err: fmt.Errorf("no credentials found: set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY")}
+		}
+
+		// Best-effort stop — daemon may already be down.
+		if daemon.IsRunning() {
+			if err := daemon.Stop(); err != nil {
+				return daemonRestartedMsg{err: fmt.Errorf("stop: %w", err)}
+			}
+		}
+
+		if err := daemon.Start(apiKey, oauthToken); err != nil {
+			return daemonRestartedMsg{err: fmt.Errorf("start: %w", err)}
+		}
+		return daemonRestartedMsg{}
 	}
 }
 

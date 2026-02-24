@@ -67,6 +67,9 @@ type Model struct {
 	filterCursor int
 	filterItems  []string // "All" + project names
 
+	// Restart state.
+	restarting bool
+
 	// Tick state.
 	tickCount  int
 	lastErr    string
@@ -210,6 +213,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, fetchProjects(m.baseURL)
 
+	case daemonRestartedMsg:
+		m.restarting = false
+		if msg.err != nil {
+			m.lastErr = "restart: " + msg.err.Error()
+		} else {
+			m.lastErr = ""
+			m.states = make(map[string]*daemon.State)
+			m.daemonLog = nil
+		}
+		return m, fetchProjects(m.baseURL)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -339,6 +353,13 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "R":
+		if !m.restarting {
+			m.mode = modeConfirm
+			m.confirmAction = "restart"
+		}
+		return m, nil
+
 	case "s":
 		if m.projectFilter != "" {
 			// Determine current project status.
@@ -433,6 +454,9 @@ func (m Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, startProject(m.baseURL, m.confirmProject)
 		case "stop":
 			return m, stopProject(m.baseURL, m.confirmProject)
+		case "restart":
+			m.restarting = true
+			return m, restartDaemon()
 		}
 		return m, nil
 
@@ -556,34 +580,39 @@ func (m *Model) updateAgentsView() {
 	}
 
 	if len(lines) == 0 {
-		// Check if any visible project is in startup phase.
-		var startupPhase string
-		for _, projName := range projectNames {
-			if s, ok := m.states[projName]; ok && s != nil && s.Status == "starting" && s.StartupPhase != "" {
-				startupPhase = s.StartupPhase
-				break
-			}
-		}
-
-		if startupPhase != "" {
+		if m.restarting {
 			frame := spinnerFrames[m.tickCount%len(spinnerFrames)]
-			lines = append(lines, fmt.Sprintf("  %c %s", frame, startupPhase))
-		} else if m.projectFilter != "" {
-			// Check if the filtered project is stopped.
-			stopped := true
-			for _, p := range m.projects {
-				if p.Name == m.projectFilter && p.Status == "running" {
-					stopped = false
+			lines = append(lines, fmt.Sprintf("  %c Restarting daemon...", frame))
+		} else {
+			// Check if any visible project is in startup phase.
+			var startupPhase string
+			for _, projName := range projectNames {
+				if s, ok := m.states[projName]; ok && s != nil && s.Status == "starting" && s.StartupPhase != "" {
+					startupPhase = s.StartupPhase
 					break
 				}
 			}
-			if stopped {
-				lines = append(lines, dimStyle.Render("  Project stopped. Press 's' to start."))
+
+			if startupPhase != "" {
+				frame := spinnerFrames[m.tickCount%len(spinnerFrames)]
+				lines = append(lines, fmt.Sprintf("  %c %s", frame, startupPhase))
+			} else if m.projectFilter != "" {
+				// Check if the filtered project is stopped.
+				stopped := true
+				for _, p := range m.projects {
+					if p.Name == m.projectFilter && p.Status == "running" {
+						stopped = false
+						break
+					}
+				}
+				if stopped {
+					lines = append(lines, dimStyle.Render("  Project stopped. Press 's' to start."))
+				} else {
+					lines = append(lines, dimStyle.Render("  No agents running"))
+				}
 			} else {
 				lines = append(lines, dimStyle.Render("  No agents running"))
 			}
-		} else {
-			lines = append(lines, dimStyle.Render("  No agents running"))
 		}
 	}
 
@@ -835,7 +864,7 @@ func (m Model) renderStatusBar() string {
 	var left string
 	switch m.mode {
 	case modeNormal:
-		left = "  Tab:panel  1-4:panel  p:project  s:start/stop  a:add task  q:quit"
+		left = "  Tab:panel  1-4:panel  p:project  s:start/stop  R:restart  a:add task  q:quit"
 	case modeAddTask:
 		left = "  Enter:submit  Esc:cancel"
 	case modeProjectFilter:
@@ -910,7 +939,9 @@ func (m Model) overlayConfirm(base string) string {
 	}
 
 	var prompt string
-	if action == "start" || action == "stop" {
+	if action == "restart" {
+		prompt = "Restart the daemon? All running projects will be temporarily stopped. (y/n)"
+	} else if action == "start" || action == "stop" {
 		prompt = fmt.Sprintf("%s project %q? (y/n)", actionLabel, m.confirmProject)
 	} else {
 		taskTitle := ""
